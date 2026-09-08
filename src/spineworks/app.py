@@ -104,7 +104,7 @@ class MainWindow(QMainWindow):
         self.instrument_button.clicked.connect(self.apply_instrument_codes)
         layout.addWidget(self.instrument_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        self.addic_button = QPushButton("Uruchom addic")
+        self.addic_button = QPushButton("addic")
         self.addic_button.setObjectName("primaryButton")
         self.addic_button.setEnabled(False)
         self.addic_button.clicked.connect(self.apply_addic)
