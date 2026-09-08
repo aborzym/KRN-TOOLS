@@ -149,6 +149,18 @@ class HumdrumDocument:
         self.header.instrument_group_line = insert_after + 1
         return True
 
+    def remove_instrument_groups(self) -> bool:
+        line_number = self.header.instrument_group_line
+        if line_number is None:
+            return False
+        self.lines.pop(line_number)
+        self.header.instrument_group_line = None
+        for field_name in self.header.__dataclass_fields__:
+            current = getattr(self.header, field_name)
+            if isinstance(current, int) and current > line_number:
+                setattr(self.header, field_name, current - 1)
+        return True
+
     def set_instrument_names(self, values: list[str]) -> bool:
         return self._set_existing_prefixed_row(
             self.header.instrument_name_line, values, '*I"', "nazwy pełnej"
