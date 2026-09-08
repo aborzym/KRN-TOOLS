@@ -15,7 +15,7 @@ def run_addic(document: HumdrumDocument) -> HumdrumDocument:
     Path("addic-input.krn").write_text(source_text, encoding="utf-8")
     try:
         result = subprocess.run(
-            [executable],
+            [executable, "-f"],
             input=source_text,
             text=True,
             capture_output=True,
