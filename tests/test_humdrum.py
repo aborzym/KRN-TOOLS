@@ -75,6 +75,20 @@ def test_updates_existing_instrument_code_row() -> None:
     assert document.instrument_codes()[3] == "*Iclars"
 
 
+def test_updates_names_with_protected_prefixes() -> None:
+    document = HumdrumDocument.from_text(
+        f"{EXCLUSIVE}\n*part2\t*\t*\t*part1\t*\n"
+        "*staff2\t*\t*\t*staff1\t*\n"
+        '*I"Organo.\t*\t*\t*I"Violino.\t*\n'
+        "*I'Org\t*\t*\t*I'Vln\t*\n=1\t=1\t=1\t=1\t=1\n"
+    )
+
+    assert document.set_instrument_names(["Organo", "", "", "Clarino", ""])
+    assert document.set_instrument_abbreviations(["Org", "", "", "Cl", ""])
+    assert document.fields(document.header.instrument_name_line)[3] == '*I"Clarino'
+    assert document.fields(document.header.instrument_abbr_line)[3] == "*I'Cl"
+
+
 def test_rejects_missing_staff_row() -> None:
     document = HumdrumDocument.from_text(
         f"{EXCLUSIVE}\n*part2\t*\t*\t*part1\t*part1\n=1\t=1\t=1\t=1\t=1\n"
