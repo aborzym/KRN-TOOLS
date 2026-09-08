@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from spineworks.filters import run_addic
+from spineworks.filters import run_addic, run_barnum
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 
 
@@ -121,6 +121,22 @@ class MainWindow(QMainWindow):
         self.ig_button.setEnabled(False)
         self.ig_button.clicked.connect(self.toggle_instrument_group_row)
         filter_buttons.addWidget(self.ig_button)
+
+        self.remove_barnums_button = QPushButton("Usuń numery taktów")
+        self.remove_barnums_button.setObjectName("primaryButton")
+        self.remove_barnums_button.setEnabled(False)
+        self.remove_barnums_button.clicked.connect(
+            lambda _checked=False: self.apply_barnum("-r")
+        )
+        filter_buttons.addWidget(self.remove_barnums_button)
+
+        self.add_barnums_button = QPushButton("Dodaj numery taktów")
+        self.add_barnums_button.setObjectName("primaryButton")
+        self.add_barnums_button.setEnabled(False)
+        self.add_barnums_button.clicked.connect(
+            lambda _checked=False: self.apply_barnum("-a")
+        )
+        filter_buttons.addWidget(self.add_barnums_button)
         filter_buttons.addStretch(1)
         layout.addLayout(filter_buttons)
 
@@ -156,6 +172,8 @@ class MainWindow(QMainWindow):
         self.propagate_button.setEnabled(True)
         self.addic_button.setEnabled(True)
         self.ig_button.setEnabled(True)
+        self.remove_barnums_button.setEnabled(True)
+        self.add_barnums_button.setEnabled(True)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
         self.file_label.setText(str(path))
@@ -276,6 +294,28 @@ class MainWindow(QMainWindow):
         self.undo_action.setEnabled(True)
         self._refresh_table()
         self.statusBar().showMessage("Filtr addic utworzył klasy instrumentów")
+
+    def apply_barnum(self, mode: str) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+        before = self.document.to_text()
+        try:
+            filtered = run_barnum(self.document, mode)
+        except HumdrumError as error:
+            QMessageBox.warning(self, "Nie można uruchomić barnum", str(error))
+            return
+        if filtered.to_text() == before:
+            action = "usunięcia" if mode == "-r" else "dodania"
+            self.statusBar().showMessage(f"Brak numerów taktów do {action}")
+            return
+        self.document = filtered
+        self.undo_texts.append(before)
+        self.undo_action.setEnabled(True)
+        self._refresh_table()
+        action = "Usunięto" if mode == "-r" else "Dodano"
+        self.statusBar().showMessage(f"{action} numery taktów")
 
     def toggle_row_editing(self, row: int) -> None:
         kind = self.editable_row_indexes.get(row)
