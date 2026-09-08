@@ -16,6 +16,7 @@ class HeaderBlock:
     instrument_name_line: int | None
     instrument_abbr_line: int | None
     instrument_code_line: int | None
+    instrument_class_line: int | None
 
     @property
     def line_numbers(self) -> list[int]:
@@ -26,6 +27,7 @@ class HeaderBlock:
             self.instrument_name_line,
             self.instrument_abbr_line,
             self.instrument_code_line,
+            self.instrument_class_line,
         ]
         return [line for line in candidates if line is not None]
 
@@ -186,6 +188,7 @@ class HumdrumDocument:
             "name": None,
             "abbr": None,
             "code": None,
+            "class": None,
         }
         for index in range(exclusive_line + 1, len(self.lines)):
             line = self.lines[index]
@@ -210,6 +213,8 @@ class HumdrumDocument:
                 for value in fields
             ):
                 found["code"] = index
+            elif found["class"] is None and any(value.startswith("*IC") for value in fields):
+                found["class"] = index
 
         return HeaderBlock(
             exclusive_line=exclusive_line,
@@ -218,6 +223,7 @@ class HumdrumDocument:
             instrument_name_line=found["name"],
             instrument_abbr_line=found["abbr"],
             instrument_code_line=found["code"],
+            instrument_class_line=found["class"],
         )
 
     def _validate_width(self, fields: list[str], label: str) -> None:
