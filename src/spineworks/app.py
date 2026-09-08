@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -195,6 +195,11 @@ class MainWindow(QMainWindow):
         else:
             self.enabled_edit_rows.add(kind)
         self._refresh_table()
+        self.table.clearSelection()
+        if kind in self.enabled_edit_rows:
+            first_field = next(iter(self.row_inputs[kind].values()))
+            first_field.setFocus()
+            first_field.selectAll()
 
     def _refresh_table(self) -> None:
         if self.document is None:
@@ -228,7 +233,13 @@ class MainWindow(QMainWindow):
                 labels.append(f"{'☑' if kind in self.enabled_edit_rows else '☐'} {label}")
             else:
                 labels.append(label)
-        self.table.setVerticalHeaderLabels(labels)
+        for row, label in enumerate(labels):
+            header_item = QTableWidgetItem(label)
+            if row in self.editable_row_indexes:
+                font = header_item.font()
+                font.setPointSize(font.pointSize() + 1)
+                header_item.setFont(font)
+            self.table.setVerticalHeaderItem(row, header_item)
         self.row_inputs.clear()
         for row, (_, line_number, kind, fixed_prefix) in enumerate(rows):
             values = (
@@ -279,6 +290,8 @@ class MainWindow(QMainWindow):
             target.setFocus()
             target.selectAll()
             return True
+        if watched in fields and event.type() == QEvent.Type.MouseButtonPress:
+            QTimer.singleShot(0, watched.selectAll)
         return super().eventFilter(watched, event)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
