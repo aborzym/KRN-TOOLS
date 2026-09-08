@@ -9,7 +9,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QHeaderView,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -37,6 +39,7 @@ class MainWindow(QMainWindow):
         self.document: HumdrumDocument | None = None
         self.current_path: Path | None = None
         self.undo_texts: list[str] = []
+        self.instrument_inputs: dict[int, QLineEdit] = {}
         self.setWindowTitle("SPINEWORKS")
         self.resize(1200, 650)
         self.setAcceptDrops(True)
@@ -70,11 +73,7 @@ class MainWindow(QMainWindow):
 
         self.table = QTableWidget(0, 0)
         self.table.setAlternatingRowColors(True)
-        self.table.setEditTriggers(
-            QTableWidget.EditTrigger.DoubleClicked
-            | QTableWidget.EditTrigger.SelectedClicked
-            | QTableWidget.EditTrigger.EditKeyPressed
-        )
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.table, 1)
@@ -148,7 +147,9 @@ class MainWindow(QMainWindow):
             return
         code_row = self.table.rowCount() - 1
         values = [
-            self.table.item(code_row, column).text()
+            f"*{self.instrument_inputs[column].text()}"
+            if column in self.instrument_inputs
+            else "*"
             for column in range(self.document.spine_count)
         ]
         before = self.document.to_text()
@@ -189,6 +190,7 @@ class MainWindow(QMainWindow):
                 header_item.setForeground(QColor("#63d297"))
             self.table.setHorizontalHeaderItem(column, header_item)
         self.table.setVerticalHeaderLabels([label for label, _ in rows])
+        self.instrument_inputs.clear()
         for row, (_, line_number) in enumerate(rows):
             values = (
                 self.document.instrument_codes()
@@ -196,13 +198,24 @@ class MainWindow(QMainWindow):
                 else self.document.fields(line_number)
             )
             for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
                 if line_number == -1 and self.document.spine_types[column] == "**kern":
-                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                    item.setBackground(QColor("#183d29"))
-                    item.setForeground(QColor("#d8f8e4"))
-                else:
-                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    editor = QWidget()
+                    editor.setObjectName("instrumentEditor")
+                    editor_layout = QHBoxLayout(editor)
+                    editor_layout.setContentsMargins(7, 2, 5, 2)
+                    editor_layout.setSpacing(1)
+                    prefix = QLabel("*")
+                    prefix.setObjectName("fixedPrefix")
+                    field = QLineEdit("" if value == "*" else value.removeprefix("*"))
+                    field.setPlaceholderText("I…")
+                    field.setFrame(False)
+                    editor_layout.addWidget(prefix)
+                    editor_layout.addWidget(field, 1)
+                    self.instrument_inputs[column] = field
+                    self.table.setCellWidget(row, column, editor)
+                    continue
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row, column, item)
         self.table.resizeRowsToContents()
 
@@ -239,6 +252,12 @@ class MainWindow(QMainWindow):
             }
             QPushButton#primaryButton:hover { background: #1b9a61; }
             QPushButton#primaryButton:disabled { background: #26342b; color: #718078; }
+            QWidget#instrumentEditor { background: #183d29; }
+            QLabel#fixedPrefix { background: transparent; color: #63d297; font-weight: 700; }
+            QLineEdit {
+                background: transparent; color: #d8f8e4; border: 0;
+                selection-background-color: #177245; padding: 3px 1px;
+            }
             QStatusBar { background: #111a14; color: #9fb2a5; }
             """
         )
