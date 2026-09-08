@@ -122,21 +122,11 @@ class MainWindow(QMainWindow):
         self.ig_button.clicked.connect(self.toggle_instrument_group_row)
         filter_buttons.addWidget(self.ig_button)
 
-        self.remove_barnums_button = QPushButton("Usuń numery taktów")
-        self.remove_barnums_button.setObjectName("primaryButton")
-        self.remove_barnums_button.setEnabled(False)
-        self.remove_barnums_button.clicked.connect(
-            lambda _checked=False: self.apply_barnum("-r")
-        )
-        filter_buttons.addWidget(self.remove_barnums_button)
-
-        self.add_barnums_button = QPushButton("Dodaj numery taktów")
-        self.add_barnums_button.setObjectName("primaryButton")
-        self.add_barnums_button.setEnabled(False)
-        self.add_barnums_button.clicked.connect(
-            lambda _checked=False: self.apply_barnum("-a")
-        )
-        filter_buttons.addWidget(self.add_barnums_button)
+        self.barnum_button = QPushButton("barnum")
+        self.barnum_button.setObjectName("primaryButton")
+        self.barnum_button.setEnabled(False)
+        self.barnum_button.clicked.connect(self.apply_barnum)
+        filter_buttons.addWidget(self.barnum_button)
         filter_buttons.addStretch(1)
         layout.addLayout(filter_buttons)
 
@@ -172,8 +162,7 @@ class MainWindow(QMainWindow):
         self.propagate_button.setEnabled(True)
         self.addic_button.setEnabled(True)
         self.ig_button.setEnabled(True)
-        self.remove_barnums_button.setEnabled(True)
-        self.add_barnums_button.setEnabled(True)
+        self.barnum_button.setEnabled(True)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
         self.file_label.setText(str(path))
@@ -295,27 +284,25 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self.statusBar().showMessage("Filtr addic utworzył klasy instrumentów")
 
-    def apply_barnum(self, mode: str) -> None:
+    def apply_barnum(self) -> None:
         if self.document is None:
             return
         if not self.apply_instrument_codes(show_unchanged_status=False):
             return
         before = self.document.to_text()
         try:
-            filtered = run_barnum(self.document, mode)
+            filtered = run_barnum(self.document)
         except HumdrumError as error:
             QMessageBox.warning(self, "Nie można uruchomić barnum", str(error))
             return
         if filtered.to_text() == before:
-            action = "usunięcia" if mode == "-r" else "dodania"
-            self.statusBar().showMessage(f"Brak numerów taktów do {action}")
+            self.statusBar().showMessage("Numery taktów są już prawidłowe")
             return
         self.document = filtered
         self.undo_texts.append(before)
         self.undo_action.setEnabled(True)
         self._refresh_table()
-        action = "Usunięto" if mode == "-r" else "Dodano"
-        self.statusBar().showMessage(f"{action} numery taktów")
+        self.statusBar().showMessage("Ponownie ponumerowano takty")
 
     def toggle_row_editing(self, row: int) -> None:
         kind = self.editable_row_indexes.get(row)
@@ -476,6 +463,19 @@ class MainWindow(QMainWindow):
             target = fields[(current + step) % len(fields)]
             target.setFocus()
             target.selectAll()
+            for kind, row_fields in self.row_inputs.items():
+                for column, field in row_fields.items():
+                    if field is target:
+                        table_row = next(
+                            index
+                            for index, row_kind in self.editable_row_indexes.items()
+                            if row_kind == kind
+                        )
+                        self.table.scrollTo(
+                            self.table.model().index(table_row, column),
+                            QAbstractItemView.ScrollHint.EnsureVisible,
+                        )
+                        return True
             return True
         if watched in fields and event.type() == QEvent.Type.MouseButtonPress:
             QTimer.singleShot(0, watched.selectAll)
