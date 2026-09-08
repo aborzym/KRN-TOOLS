@@ -207,7 +207,6 @@ class MainWindow(QMainWindow):
                     prefix = QLabel("*")
                     prefix.setObjectName("fixedPrefix")
                     field = QLineEdit("" if value == "*" else value.removeprefix("*"))
-                    field.setPlaceholderText("I…")
                     field.setFrame(False)
                     editor_layout.addWidget(prefix)
                     editor_layout.addWidget(field, 1)
@@ -217,6 +216,9 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row, column, item)
+        editable_fields = list(self.instrument_inputs.values())
+        for current, following in zip(editable_fields, editable_fields[1:], strict=False):
+            QWidget.setTabOrder(current, following)
         self.table.resizeRowsToContents()
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
