@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -143,9 +143,16 @@ class MainWindow(QMainWindow):
 
         self.table.setRowCount(len(rows))
         self.table.setColumnCount(self.document.spine_count)
-        self.table.setHorizontalHeaderLabels(
-            [f"{number + 1}\n{kind}" for number, kind in enumerate(self.document.spine_types)]
-        )
+        for column, spine_type in enumerate(self.document.spine_types):
+            header_item = QTableWidgetItem(str(column + 1))
+            header_item.setToolTip(spine_type)
+            if spine_type == "**kern":
+                font = header_item.font()
+                font.setBold(True)
+                font.setPointSize(font.pointSize() + 1)
+                header_item.setFont(font)
+                header_item.setForeground(QColor("#63d297"))
+            self.table.setHorizontalHeaderItem(column, header_item)
         self.table.setVerticalHeaderLabels([label for label, _ in rows])
         for row, (_, line_number) in enumerate(rows):
             for column, value in enumerate(self.document.fields(line_number)):
@@ -200,4 +207,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
