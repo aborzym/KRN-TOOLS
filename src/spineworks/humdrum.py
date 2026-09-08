@@ -101,6 +101,31 @@ class HumdrumDocument:
             return ["*"] * self.spine_count
         return self.fields(self.header.instrument_code_line)
 
+    def set_instrument_names(self, values: list[str]) -> bool:
+        return self._set_existing_prefixed_row(
+            self.header.instrument_name_line, values, '*I"', "nazwy pełnej"
+        )
+
+    def set_instrument_abbreviations(self, values: list[str]) -> bool:
+        return self._set_existing_prefixed_row(
+            self.header.instrument_abbr_line, values, "*I'", "nazwy skróconej"
+        )
+
+    def _set_existing_prefixed_row(
+        self, line_number: int | None, values: list[str], prefix: str, label: str
+    ) -> bool:
+        if line_number is None:
+            raise HumdrumError(f"Brak wiersza {label} instrumentu.")
+        self._validate_width(values, prefix)
+        normalized = [
+            prefix + value.strip() if spine_type == "**kern" and value.strip() else "*"
+            for spine_type, value in zip(self.spine_types, values, strict=True)
+        ]
+        if self.fields(line_number) == normalized:
+            return False
+        self.replace_fields(line_number, normalized)
+        return True
+
     def set_instrument_codes(self, values: list[str]) -> bool:
         self._validate_width(values, "*I")
         normalized: list[str] = []
