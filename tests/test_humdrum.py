@@ -101,6 +101,9 @@ def test_adds_instrument_group_between_class_and_code() -> None:
         "*IGcont\t*",
         "*Iorgan\t*Ibass",
     ]
+    assert document.remove_instrument_groups()
+    assert document.instrument_groups() == ["*", "*"]
+    assert document.instrument_codes() == ["*Iorgan", "*Ibass"]
 
 
 def test_rejects_missing_staff_row() -> None:
