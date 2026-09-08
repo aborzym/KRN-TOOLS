@@ -35,11 +35,13 @@ class MainWindow(QMainWindow):
         "instrument_name_line": "Nazwa pełna",
         "instrument_abbr_line": "Nazwa skrócona",
         "instrument_class_line": "Klasa instrumentu",
+        "instrument_group_line": "Grupa instrumentu",
     }
     EDITABLE_ROWS = {
         "instrument_name_line": '*I"',
         "instrument_abbr_line": "*I'",
         "instrument_code_line": "*",
+        "instrument_group_line": "*IG",
     }
 
     def __init__(self) -> None:
@@ -50,6 +52,7 @@ class MainWindow(QMainWindow):
         self.row_inputs: dict[str, dict[int, QLineEdit]] = {}
         self.enabled_edit_rows: set[str] = set()
         self.editable_row_indexes: dict[int, str] = {}
+        self.show_group_row = False
         self.setWindowTitle("SPINEWORKS")
         self.resize(1200, 650)
         self.setAcceptDrops(True)
@@ -104,11 +107,22 @@ class MainWindow(QMainWindow):
         self.instrument_button.clicked.connect(self.apply_instrument_codes)
         layout.addWidget(self.instrument_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
+        filter_buttons = QHBoxLayout()
+        filter_buttons.setSpacing(8)
+
         self.addic_button = QPushButton("addic")
         self.addic_button.setObjectName("primaryButton")
         self.addic_button.setEnabled(False)
         self.addic_button.clicked.connect(self.apply_addic)
-        layout.addWidget(self.addic_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        filter_buttons.addWidget(self.addic_button)
+
+        self.ig_button = QPushButton("IG")
+        self.ig_button.setObjectName("primaryButton")
+        self.ig_button.setEnabled(False)
+        self.ig_button.clicked.connect(self.show_instrument_group_row)
+        filter_buttons.addWidget(self.ig_button)
+        filter_buttons.addStretch(1)
+        layout.addLayout(filter_buttons)
 
         self.setCentralWidget(central)
         self.statusBar().showMessage("Gotowe")
@@ -136,10 +150,13 @@ class MainWindow(QMainWindow):
         self.document = document
         self.current_path = path
         self.undo_texts.clear()
+        self.enabled_edit_rows.clear()
         self.undo_action.setEnabled(False)
         self.propagate_button.setEnabled(True)
         self.instrument_button.setEnabled(True)
         self.addic_button.setEnabled(True)
+        self.ig_button.setEnabled(True)
+        self.show_group_row = document.header.instrument_group_line is not None
         self.file_label.setText(str(path))
         self._refresh_table()
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
@@ -186,6 +203,10 @@ class MainWindow(QMainWindow):
             if "instrument_code_line" in self.enabled_edit_rows:
                 codes = [f"*{value}" if value else "*" for value in self._row_values("instrument_code_line")]
                 changed |= self.document.set_instrument_codes(codes)
+            if "instrument_group_line" in self.enabled_edit_rows:
+                changed |= self.document.set_instrument_groups(
+                    self._row_values("instrument_group_line")
+                )
         except HumdrumError as error:
             QMessageBox.warning(self, "Nie można zastosować danych", str(error))
             return
@@ -254,6 +275,14 @@ class MainWindow(QMainWindow):
             first_field.setFocus()
             first_field.selectAll()
 
+    def show_instrument_group_row(self) -> None:
+        self.show_group_row = True
+        self.enabled_edit_rows.add("instrument_group_line")
+        self._refresh_table()
+        first_field = next(iter(self.row_inputs["instrument_group_line"].values()))
+        first_field.setFocus()
+        first_field.selectAll()
+
     def _refresh_table(self) -> None:
         if self.document is None:
             return
@@ -263,6 +292,9 @@ class MainWindow(QMainWindow):
             if line_number is not None:
                 prefix = self.EDITABLE_ROWS.get(attribute)
                 rows.append((label, line_number, attribute if prefix else None, prefix))
+
+        if self.show_group_row and self.document.header.instrument_group_line is None:
+            rows.append(("Grupa instrumentu", -2, "instrument_group_line", "*IG"))
 
         if self.document.header.instrument_code_line is None:
             rows.append(("Kod instrumentu", -1, "instrument_code_line", "*"))
@@ -275,7 +307,14 @@ class MainWindow(QMainWindow):
                     "*",
                 )
             )
-        rows.sort(key=lambda row: row[1] if row[1] >= 0 else float("inf"))
+        def row_order(row):
+            label, line_number, _, _ = row
+            if label == "Grupa instrumentu" and line_number == -2:
+                class_line = self.document.header.instrument_class_line
+                return (class_line + 0.5) if class_line is not None else float("inf") - 1
+            return line_number if line_number >= 0 else float("inf")
+
+        rows.sort(key=row_order)
 
         self.table.clearContents()
         self.table.setRowCount(0)
@@ -306,6 +345,8 @@ class MainWindow(QMainWindow):
         for row, (label, line_number, kind, fixed_prefix) in enumerate(rows):
             if label == "Klasa instrumentu":
                 values = self.document.instrument_classes()
+            elif label == "Grupa instrumentu":
+                values = self.document.instrument_groups()
             elif line_number == -1:
                 values = self.document.instrument_codes()
             else:
