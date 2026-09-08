@@ -89,6 +89,20 @@ def test_updates_names_with_protected_prefixes() -> None:
     assert document.fields(document.header.instrument_abbr_line)[3] == "*I'Cl"
 
 
+def test_adds_instrument_group_between_class_and_code() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n*ICklav\t*ICvox\n*Iorgan\t*Ibass\n*-\t*-\n"
+    )
+
+    assert document.set_instrument_groups(["cont", ""])
+    assert document.instrument_groups() == ["*IGcont", "*"]
+    assert document.lines[1:4] == [
+        "*ICklav\t*ICvox",
+        "*IGcont\t*",
+        "*Iorgan\t*Ibass",
+    ]
+
+
 def test_rejects_missing_staff_row() -> None:
     document = HumdrumDocument.from_text(
         f"{EXCLUSIVE}\n*part2\t*\t*\t*part1\t*part1\n=1\t=1\t=1\t=1\t=1\n"
