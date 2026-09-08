@@ -17,6 +17,7 @@ class HeaderBlock:
     instrument_abbr_line: int | None
     instrument_code_line: int | None
     instrument_class_line: int | None
+    instrument_group_line: int | None
 
     @property
     def line_numbers(self) -> list[int]:
@@ -28,6 +29,7 @@ class HeaderBlock:
             self.instrument_abbr_line,
             self.instrument_code_line,
             self.instrument_class_line,
+            self.instrument_group_line,
         ]
         return [line for line in candidates if line is not None]
 
@@ -112,6 +114,40 @@ class HumdrumDocument:
             if active and all(value.startswith("*IC") for value in active):
                 return fields
         return ["*"] * self.spine_count
+
+    def instrument_groups(self) -> list[str]:
+        if self.header.instrument_group_line is None:
+            return ["*"] * self.spine_count
+        return self.fields(self.header.instrument_group_line)
+
+    def set_instrument_groups(self, values: list[str]) -> bool:
+        self._validate_width(values, "*IG")
+        normalized = [
+            f"*IG{value.strip()}" if spine_type == "**kern" and value.strip() else "*"
+            for spine_type, value in zip(self.spine_types, values, strict=True)
+        ]
+        if all(value == "*" for value in normalized):
+            return False
+        if self.header.instrument_group_line is not None:
+            if self.fields(self.header.instrument_group_line) == normalized:
+                return False
+            self.replace_fields(self.header.instrument_group_line, normalized)
+            return True
+
+        insert_after = (
+            self.header.instrument_class_line
+            if self.header.instrument_class_line is not None
+            else self.header.instrument_abbr_line
+        )
+        if insert_after is None:
+            insert_after = self.header.exclusive_line
+        self.lines.insert(insert_after + 1, "\t".join(normalized))
+        for field_name in self.header.__dataclass_fields__:
+            current = getattr(self.header, field_name)
+            if isinstance(current, int) and current > insert_after:
+                setattr(self.header, field_name, current + 1)
+        self.header.instrument_group_line = insert_after + 1
+        return True
 
     def set_instrument_names(self, values: list[str]) -> bool:
         return self._set_existing_prefixed_row(
@@ -199,6 +235,7 @@ class HumdrumDocument:
             "abbr": None,
             "code": None,
             "class": None,
+            "group": None,
         }
         for index in range(exclusive_line + 1, len(self.lines)):
             line = self.lines[index]
@@ -227,6 +264,10 @@ class HumdrumDocument:
                 active = [value for value in fields if value != "*"]
                 if active and all(value.startswith("*IC") for value in active):
                     found["class"] = index
+            if found["group"] is None:
+                active = [value for value in fields if value != "*"]
+                if active and all(value.startswith("*IG") for value in active):
+                    found["group"] = index
 
         return HeaderBlock(
             exclusive_line=exclusive_line,
@@ -236,6 +277,7 @@ class HumdrumDocument:
             instrument_abbr_line=found["abbr"],
             instrument_code_line=found["code"],
             instrument_class_line=found["class"],
+            instrument_group_line=found["group"],
         )
 
     def _validate_width(self, fields: list[str], label: str) -> None:
