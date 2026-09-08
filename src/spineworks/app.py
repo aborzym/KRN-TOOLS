@@ -33,13 +33,20 @@ class MainWindow(QMainWindow):
         "instrument_name_line": "Nazwa pełna",
         "instrument_abbr_line": "Nazwa skrócona",
     }
+    EDITABLE_ROWS = {
+        "instrument_name_line": '*I"',
+        "instrument_abbr_line": "*I'",
+        "instrument_code_line": "*",
+    }
 
     def __init__(self) -> None:
         super().__init__()
         self.document: HumdrumDocument | None = None
         self.current_path: Path | None = None
         self.undo_texts: list[str] = []
-        self.instrument_inputs: dict[int, QLineEdit] = {}
+        self.row_inputs: dict[str, dict[int, QLineEdit]] = {}
+        self.enabled_edit_rows: set[str] = set()
+        self.editable_row_indexes: dict[int, str] = {}
         self.setWindowTitle("SPINEWORKS")
         self.resize(1200, 650)
         self.setAcceptDrops(True)
@@ -76,6 +83,8 @@ class MainWindow(QMainWindow):
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.table.verticalHeader().setSectionsClickable(True)
+        self.table.verticalHeader().sectionClicked.connect(self.toggle_row_editing)
         layout.addWidget(self.table, 1)
 
         self.propagate_button = QPushButton("Uzupełnij przypisania spine’ów")
@@ -84,7 +93,7 @@ class MainWindow(QMainWindow):
         self.propagate_button.clicked.connect(self.propagate_assignments)
         layout.addWidget(self.propagate_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        self.instrument_button = QPushButton("Zastosuj kody instrumentów")
+        self.instrument_button = QPushButton("Zastosuj dane instrumentów")
         self.instrument_button.setObjectName("primaryButton")
         self.instrument_button.setEnabled(False)
         self.instrument_button.clicked.connect(self.apply_instrument_codes)
@@ -145,37 +154,59 @@ class MainWindow(QMainWindow):
     def apply_instrument_codes(self) -> None:
         if self.document is None:
             return
-        code_row = self.table.rowCount() - 1
-        values = [
-            f"*{self.instrument_inputs[column].text()}"
-            if column in self.instrument_inputs
-            else "*"
-            for column in range(self.document.spine_count)
-        ]
         before = self.document.to_text()
         try:
-            changed = self.document.set_instrument_codes(values)
+            changed = False
+            if "instrument_name_line" in self.enabled_edit_rows:
+                changed |= self.document.set_instrument_names(
+                    self._row_values("instrument_name_line")
+                )
+            if "instrument_abbr_line" in self.enabled_edit_rows:
+                changed |= self.document.set_instrument_abbreviations(
+                    self._row_values("instrument_abbr_line")
+                )
+            if "instrument_code_line" in self.enabled_edit_rows:
+                codes = [f"*{value}" if value else "*" for value in self._row_values("instrument_code_line")]
+                changed |= self.document.set_instrument_codes(codes)
         except HumdrumError as error:
-            QMessageBox.warning(self, "Nie można zastosować kodów", str(error))
+            QMessageBox.warning(self, "Nie można zastosować danych", str(error))
             return
         if changed:
             self.undo_texts.append(before)
             self.undo_action.setEnabled(True)
             self._refresh_table()
-            self.statusBar().showMessage("Zastosowano kody instrumentów")
+            self.statusBar().showMessage("Zastosowano dane instrumentów")
         else:
-            self.statusBar().showMessage("Kody instrumentów nie wymagają zmian")
+            self.statusBar().showMessage("Dane instrumentów nie wymagają zmian")
+
+    def _row_values(self, kind: str) -> list[str]:
+        fields = self.row_inputs.get(kind, {})
+        return [
+            fields[column].text() if column in fields else ""
+            for column in range(self.document.spine_count)
+        ]
+
+    def toggle_row_editing(self, row: int) -> None:
+        kind = self.editable_row_indexes.get(row)
+        if kind is None:
+            return
+        if kind in self.enabled_edit_rows:
+            self.enabled_edit_rows.remove(kind)
+        else:
+            self.enabled_edit_rows.add(kind)
+        self._refresh_table()
 
     def _refresh_table(self) -> None:
         if self.document is None:
             return
-        rows: list[tuple[str, int]] = []
+        rows: list[tuple[str, int, str | None, str | None]] = []
         for attribute, label in self.ROW_NAMES.items():
             line_number = getattr(self.document.header, attribute)
             if line_number is not None:
-                rows.append((label, line_number))
+                prefix = self.EDITABLE_ROWS.get(attribute)
+                rows.append((label, line_number, attribute if prefix else None, prefix))
 
-        rows.append(("Kod instrumentu", -1))
+        rows.append(("Kod instrumentu", -1, "instrument_code_line", "*"))
 
         self.table.setRowCount(len(rows))
         self.table.setColumnCount(self.document.spine_count)
@@ -189,41 +220,54 @@ class MainWindow(QMainWindow):
                 header_item.setFont(font)
                 header_item.setForeground(QColor("#63d297"))
             self.table.setHorizontalHeaderItem(column, header_item)
-        self.table.setVerticalHeaderLabels([label for label, _ in rows])
-        self.instrument_inputs.clear()
-        for row, (_, line_number) in enumerate(rows):
+        self.editable_row_indexes.clear()
+        labels = []
+        for row, (label, _, kind, _) in enumerate(rows):
+            if kind:
+                self.editable_row_indexes[row] = kind
+                labels.append(f"{'☑' if kind in self.enabled_edit_rows else '☐'} {label}")
+            else:
+                labels.append(label)
+        self.table.setVerticalHeaderLabels(labels)
+        self.row_inputs.clear()
+        for row, (_, line_number, kind, fixed_prefix) in enumerate(rows):
             values = (
                 self.document.instrument_codes()
                 if line_number == -1
                 else self.document.fields(line_number)
             )
             for column, value in enumerate(values):
-                if line_number == -1 and self.document.spine_types[column] == "**kern":
+                if kind and self.document.spine_types[column] == "**kern":
                     editor = QWidget()
                     editor.setObjectName("instrumentEditor")
                     editor_layout = QHBoxLayout(editor)
                     editor_layout.setContentsMargins(7, 2, 5, 2)
                     editor_layout.setSpacing(1)
-                    prefix = QLabel("*")
+                    prefix = QLabel(fixed_prefix)
                     prefix.setObjectName("fixedPrefix")
-                    field = QLineEdit("" if value == "*" else value.removeprefix("*"))
+                    field = QLineEdit("" if value == "*" else value.removeprefix(fixed_prefix))
                     field.setFrame(False)
                     field.installEventFilter(self)
+                    field.setEnabled(kind in self.enabled_edit_rows)
                     editor_layout.addWidget(prefix)
                     editor_layout.addWidget(field, 1)
-                    self.instrument_inputs[column] = field
+                    self.row_inputs.setdefault(kind, {})[column] = field
                     self.table.setCellWidget(row, column, editor)
                     continue
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.table.setItem(row, column, item)
-        editable_fields = list(self.instrument_inputs.values())
-        for current, following in zip(editable_fields, editable_fields[1:], strict=False):
-            QWidget.setTabOrder(current, following)
+        for fields in self.row_inputs.values():
+            editable_fields = list(fields.values())
+            for current, following in zip(editable_fields, editable_fields[1:], strict=False):
+                QWidget.setTabOrder(current, following)
         self.table.resizeRowsToContents()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        fields = list(self.instrument_inputs.values())
+        fields = next(
+            (list(row.values()) for row in self.row_inputs.values() if watched in row.values()),
+            [],
+        )
         if (
             watched in fields
             and event.type() == QEvent.Type.KeyPress
