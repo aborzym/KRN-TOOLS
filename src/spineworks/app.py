@@ -301,12 +301,13 @@ class MainWindow(QMainWindow):
             header_item = QTableWidgetItem(label)
             self.table.setVerticalHeaderItem(row, header_item)
         self.row_inputs.clear()
-        for row, (_, line_number, kind, fixed_prefix) in enumerate(rows):
-            values = (
-                self.document.instrument_codes()
-                if line_number == -1
-                else self.document.fields(line_number)
-            )
+        for row, (label, line_number, kind, fixed_prefix) in enumerate(rows):
+            if label == "Klasa instrumentu":
+                values = self.document.instrument_classes()
+            elif line_number == -1:
+                values = self.document.instrument_codes()
+            else:
+                values = self.document.fields(line_number)
             for column, value in enumerate(values):
                 if kind and self.document.spine_types[column] == "**kern":
                     editor = QWidget()
