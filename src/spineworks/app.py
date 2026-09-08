@@ -70,7 +70,11 @@ class MainWindow(QMainWindow):
 
         self.table = QTableWidget(0, 0)
         self.table.setAlternatingRowColors(True)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(
+            QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.SelectedClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         layout.addWidget(self.table, 1)
@@ -80,6 +84,12 @@ class MainWindow(QMainWindow):
         self.propagate_button.setEnabled(False)
         self.propagate_button.clicked.connect(self.propagate_assignments)
         layout.addWidget(self.propagate_button, alignment=Qt.AlignmentFlag.AlignLeft)
+
+        self.instrument_button = QPushButton("Zastosuj kody instrumentów")
+        self.instrument_button.setObjectName("primaryButton")
+        self.instrument_button.setEnabled(False)
+        self.instrument_button.clicked.connect(self.apply_instrument_codes)
+        layout.addWidget(self.instrument_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.setCentralWidget(central)
         self.statusBar().showMessage("Gotowe")
@@ -103,6 +113,7 @@ class MainWindow(QMainWindow):
         self.undo_texts.clear()
         self.undo_action.setEnabled(False)
         self.propagate_button.setEnabled(True)
+        self.instrument_button.setEnabled(True)
         self.file_label.setText(str(path))
         self._refresh_table()
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
@@ -132,6 +143,28 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self.statusBar().showMessage("Cofnięto ostatnią zmianę")
 
+    def apply_instrument_codes(self) -> None:
+        if self.document is None:
+            return
+        code_row = self.table.rowCount() - 1
+        values = [
+            self.table.item(code_row, column).text()
+            for column in range(self.document.spine_count)
+        ]
+        before = self.document.to_text()
+        try:
+            changed = self.document.set_instrument_codes(values)
+        except HumdrumError as error:
+            QMessageBox.warning(self, "Nie można zastosować kodów", str(error))
+            return
+        if changed:
+            self.undo_texts.append(before)
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self.statusBar().showMessage("Zastosowano kody instrumentów")
+        else:
+            self.statusBar().showMessage("Kody instrumentów nie wymagają zmian")
+
     def _refresh_table(self) -> None:
         if self.document is None:
             return
@@ -140,6 +173,8 @@ class MainWindow(QMainWindow):
             line_number = getattr(self.document.header, attribute)
             if line_number is not None:
                 rows.append((label, line_number))
+
+        rows.append(("Kod instrumentu", -1))
 
         self.table.setRowCount(len(rows))
         self.table.setColumnCount(self.document.spine_count)
@@ -155,8 +190,20 @@ class MainWindow(QMainWindow):
             self.table.setHorizontalHeaderItem(column, header_item)
         self.table.setVerticalHeaderLabels([label for label, _ in rows])
         for row, (_, line_number) in enumerate(rows):
-            for column, value in enumerate(self.document.fields(line_number)):
-                self.table.setItem(row, column, QTableWidgetItem(value))
+            values = (
+                self.document.instrument_codes()
+                if line_number == -1
+                else self.document.fields(line_number)
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if line_number == -1 and self.document.spine_types[column] == "**kern":
+                    item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                    item.setBackground(QColor("#183d29"))
+                    item.setForeground(QColor("#d8f8e4"))
+                else:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.table.setItem(row, column, item)
         self.table.resizeRowsToContents()
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
