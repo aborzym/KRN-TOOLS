@@ -70,6 +70,12 @@ class MainWindow(QMainWindow):
         open_action.triggered.connect(self.open_file)
         toolbar.addAction(open_action)
 
+        self.save_action = QAction("Zapisz", self)
+        self.save_action.setShortcut(QKeySequence.StandardKey.Save)
+        self.save_action.setEnabled(False)
+        self.save_action.triggered.connect(self.save_file)
+        toolbar.addAction(self.save_action)
+
         self.undo_action = QAction("Cofnij", self)
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.setEnabled(False)
@@ -152,6 +158,7 @@ class MainWindow(QMainWindow):
         self.undo_texts.clear()
         self.enabled_edit_rows.clear()
         self.undo_action.setEnabled(False)
+        self.save_action.setEnabled(True)
         self.propagate_button.setEnabled(True)
         self.instrument_button.setEnabled(True)
         self.addic_button.setEnabled(True)
@@ -161,6 +168,18 @@ class MainWindow(QMainWindow):
         self.file_label.setText(str(path))
         self._refresh_table()
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
+
+    def save_file(self) -> None:
+        if self.document is None or self.current_path is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+        try:
+            self.current_path.write_text(self.document.to_text(), encoding="utf-8")
+        except OSError as error:
+            QMessageBox.critical(self, "Nie można zapisać pliku", str(error))
+            return
+        self.statusBar().showMessage(f"Zapisano {self.current_path.name}")
 
     def propagate_assignments(self) -> None:
         if self.document is None:
@@ -189,9 +208,9 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self.statusBar().showMessage("Cofnięto ostatnią zmianę")
 
-    def apply_instrument_codes(self) -> None:
+    def apply_instrument_codes(self, *, show_unchanged_status: bool = True) -> bool:
         if self.document is None:
-            return
+            return False
         before = self.document.to_text()
         try:
             changed = False
@@ -212,14 +231,15 @@ class MainWindow(QMainWindow):
                 )
         except HumdrumError as error:
             QMessageBox.warning(self, "Nie można zastosować danych", str(error))
-            return
+            return False
         if changed:
             self.undo_texts.append(before)
             self.undo_action.setEnabled(True)
             self._refresh_table()
             self.statusBar().showMessage("Zastosowano dane instrumentów")
-        else:
+        elif show_unchanged_status:
             self.statusBar().showMessage("Dane instrumentów nie wymagają zmian")
+        return True
 
     def _row_values(self, kind: str) -> list[str]:
         fields = self.row_inputs.get(kind, {})
@@ -231,7 +251,8 @@ class MainWindow(QMainWindow):
     def apply_addic(self) -> None:
         if self.document is None:
             return
-        self.apply_instrument_codes()
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
         missing = [
             str(column + 1)
             for column, (spine_type, code) in enumerate(
