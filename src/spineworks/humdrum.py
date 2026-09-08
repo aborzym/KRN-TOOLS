@@ -108,7 +108,8 @@ class HumdrumDocument:
             if not line.startswith("*") or line.startswith("**"):
                 break
             fields = line.split("\t")
-            if any(value.startswith("*IC") for value in fields):
+            active = [value for value in fields if value != "*"]
+            if active and all(value.startswith("*IC") for value in active):
                 return fields
         return ["*"] * self.spine_count
 
@@ -222,8 +223,10 @@ class HumdrumDocument:
                 for value in fields
             ):
                 found["code"] = index
-            elif found["class"] is None and any(value.startswith("*IC") for value in fields):
-                found["class"] = index
+            elif found["class"] is None:
+                active = [value for value in fields if value != "*"]
+                if active and all(value.startswith("*IC") for value in active):
+                    found["class"] = index
 
         return HeaderBlock(
             exclusive_line=exclusive_line,
