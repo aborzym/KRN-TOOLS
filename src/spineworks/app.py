@@ -264,19 +264,30 @@ class MainWindow(QMainWindow):
                 prefix = self.EDITABLE_ROWS.get(attribute)
                 rows.append((label, line_number, attribute if prefix else None, prefix))
 
-        rows.append(("Kod instrumentu", -1, "instrument_code_line", "*"))
+        if self.document.header.instrument_code_line is None:
+            rows.append(("Kod instrumentu", -1, "instrument_code_line", "*"))
+        else:
+            rows.append(
+                (
+                    "Kod instrumentu",
+                    self.document.header.instrument_code_line,
+                    "instrument_code_line",
+                    "*",
+                )
+            )
+        rows.sort(key=lambda row: row[1] if row[1] >= 0 else float("inf"))
 
         self.table.setRowCount(len(rows))
         self.table.setColumnCount(self.document.spine_count)
         for column, spine_type in enumerate(self.document.spine_types):
             header_item = QTableWidgetItem(str(column + 1))
             header_item.setToolTip(spine_type)
+            header_item.setForeground(QColor("#eef7f1"))
             if spine_type == "**kern":
                 font = header_item.font()
                 font.setBold(True)
-                font.setPointSize(font.pointSize() + 1)
                 header_item.setFont(font)
-                header_item.setForeground(QColor("#63d297"))
+                header_item.setBackground(QColor("#294234"))
             self.table.setHorizontalHeaderItem(column, header_item)
         self.editable_row_indexes.clear()
         labels = []
@@ -288,10 +299,6 @@ class MainWindow(QMainWindow):
                 labels.append(label)
         for row, label in enumerate(labels):
             header_item = QTableWidgetItem(label)
-            if row in self.editable_row_indexes:
-                font = header_item.font()
-                font.setPointSize(font.pointSize() + 1)
-                header_item.setFont(font)
             self.table.setVerticalHeaderItem(row, header_item)
         self.row_inputs.clear()
         for row, (_, line_number, kind, fixed_prefix) in enumerate(rows):
@@ -306,7 +313,7 @@ class MainWindow(QMainWindow):
                     editor.setObjectName(
                         "instrumentEditorActive"
                         if kind in self.enabled_edit_rows
-                        else "instrumentEditorInactive"
+                        else "instrumentEditorKernInactive"
                     )
                     editor_layout = QHBoxLayout(editor)
                     editor_layout.setContentsMargins(7, 2, 5, 2)
@@ -324,6 +331,8 @@ class MainWindow(QMainWindow):
                     continue
                 item = QTableWidgetItem(value)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if self.document.spine_types[column] == "**kern":
+                    item.setBackground(QColor("#18271e"))
                 self.table.setItem(row, column, item)
         for fields in self.row_inputs.values():
             editable_fields = list(fields.values())
@@ -385,7 +394,7 @@ class MainWindow(QMainWindow):
             QPushButton#primaryButton:hover { background: #1b9a61; }
             QPushButton#primaryButton:disabled { background: #26342b; color: #718078; }
             QWidget#instrumentEditorActive { background: #183d29; }
-            QWidget#instrumentEditorInactive { background: transparent; }
+            QWidget#instrumentEditorKernInactive { background: #18271e; }
             QLabel#fixedPrefix { background: transparent; color: #63d297; font-weight: 700; }
             QLineEdit {
                 background: transparent; color: #d8f8e4; border: 0;
