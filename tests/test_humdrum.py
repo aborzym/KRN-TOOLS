@@ -50,6 +50,31 @@ def test_second_propagation_is_noop() -> None:
     assert document.propagate_kern_assignments() is False
 
 
+def test_adds_normalized_instrument_code_row_after_abbreviations() -> None:
+    document = HumdrumDocument.from_text(
+        f"{EXCLUSIVE}\n*part2\t*\t*\t*part1\t*\n"
+        "*staff2\t*\t*\t*staff1\t*\n"
+        "*I'Org\t*\t*\t*I'Vln\t*\n=1\t=1\t=1\t=1\t=1\n"
+    )
+
+    assert document.set_instrument_codes(["org", "ignored", "*", "Ivioln", "ignored"])
+    assert document.instrument_codes() == ["*Iorg", "*", "*", "*Ivioln", "*"]
+    assert document.lines[document.header.instrument_abbr_line + 1] == (
+        "*Iorg\t*\t*\t*Ivioln\t*"
+    )
+
+
+def test_updates_existing_instrument_code_row() -> None:
+    document = HumdrumDocument.from_text(
+        f"{EXCLUSIVE}\n*part2\t*\t*\t*part1\t*\n"
+        "*staff2\t*\t*\t*staff1\t*\n"
+        "*Iorg\t*\t*\t*Ivioln\t*\n=1\t=1\t=1\t=1\t=1\n"
+    )
+
+    assert document.set_instrument_codes(["*Iorg", "*", "*", "*Iclars", "*"])
+    assert document.instrument_codes()[3] == "*Iclars"
+
+
 def test_rejects_missing_staff_row() -> None:
     document = HumdrumDocument.from_text(
         f"{EXCLUSIVE}\n*part2\t*\t*\t*part1\t*part1\n=1\t=1\t=1\t=1\t=1\n"
@@ -67,4 +92,3 @@ def test_uploaded_file_has_sixteen_spines() -> None:
     document = HumdrumDocument.from_path(sample)
 
     assert document.spine_count == 16
-
