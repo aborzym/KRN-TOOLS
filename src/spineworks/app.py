@@ -300,7 +300,11 @@ class MainWindow(QMainWindow):
         first_field.selectAll()
 
     def _sync_ig_button(self) -> None:
-        self.ig_button.setText("Usuń IG" if self.show_group_row else "IG")
+        removing = self.show_group_row
+        self.ig_button.setText("Usuń IG" if removing else "IG")
+        self.ig_button.setObjectName("dangerButton" if removing else "primaryButton")
+        self.ig_button.style().unpolish(self.ig_button)
+        self.ig_button.style().polish(self.ig_button)
 
     def _refresh_table(self) -> None:
         if self.document is None:
@@ -456,6 +460,12 @@ class MainWindow(QMainWindow):
             }
             QPushButton#primaryButton:hover { background: #1b9a61; }
             QPushButton#primaryButton:disabled { background: #26342b; color: #718078; }
+            QPushButton#dangerButton {
+                background: #7a3034; color: #fff1f1; padding: 10px 18px;
+                border: 1px solid #ad5559; border-radius: 7px; font-weight: 600;
+            }
+            QPushButton#dangerButton:hover { background: #914047; }
+            QPushButton#dangerButton:pressed { background: #64272b; }
             QWidget#instrumentEditorActive { background: #183d29; }
             QWidget#instrumentEditorKernInactive { background: #18271e; }
             QLabel#fixedPrefix { background: transparent; color: #63d297; font-weight: 700; }
