@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -208,6 +208,7 @@ class MainWindow(QMainWindow):
                     prefix.setObjectName("fixedPrefix")
                     field = QLineEdit("" if value == "*" else value.removeprefix("*"))
                     field.setFrame(False)
+                    field.installEventFilter(self)
                     editor_layout.addWidget(prefix)
                     editor_layout.addWidget(field, 1)
                     self.instrument_inputs[column] = field
@@ -220,6 +221,21 @@ class MainWindow(QMainWindow):
         for current, following in zip(editable_fields, editable_fields[1:], strict=False):
             QWidget.setTabOrder(current, following)
         self.table.resizeRowsToContents()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        fields = list(self.instrument_inputs.values())
+        if (
+            watched in fields
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)
+        ):
+            current = fields.index(watched)
+            step = -1 if event.key() == Qt.Key.Key_Backtab else 1
+            target = fields[(current + step) % len(fields)]
+            target.setFocus()
+            target.selectAll()
+            return True
+        return super().eventFilter(watched, event)
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
         urls = event.mimeData().urls()
