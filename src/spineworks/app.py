@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from spineworks.filters import run_addic
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 
 
@@ -33,6 +34,7 @@ class MainWindow(QMainWindow):
         "staff_line": "Staff",
         "instrument_name_line": "Nazwa pełna",
         "instrument_abbr_line": "Nazwa skrócona",
+        "instrument_class_line": "Klasa instrumentu",
     }
     EDITABLE_ROWS = {
         "instrument_name_line": '*I"',
@@ -102,6 +104,12 @@ class MainWindow(QMainWindow):
         self.instrument_button.clicked.connect(self.apply_instrument_codes)
         layout.addWidget(self.instrument_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
+        self.addic_button = QPushButton("Uruchom addic")
+        self.addic_button.setObjectName("primaryButton")
+        self.addic_button.setEnabled(False)
+        self.addic_button.clicked.connect(self.apply_addic)
+        layout.addWidget(self.addic_button, alignment=Qt.AlignmentFlag.AlignLeft)
+
         self.setCentralWidget(central)
         self.statusBar().showMessage("Gotowe")
 
@@ -131,6 +139,7 @@ class MainWindow(QMainWindow):
         self.undo_action.setEnabled(False)
         self.propagate_button.setEnabled(True)
         self.instrument_button.setEnabled(True)
+        self.addic_button.setEnabled(True)
         self.file_label.setText(str(path))
         self._refresh_table()
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
@@ -194,6 +203,41 @@ class MainWindow(QMainWindow):
             fields[column].text() if column in fields else ""
             for column in range(self.document.spine_count)
         ]
+
+    def apply_addic(self) -> None:
+        if self.document is None:
+            return
+        self.apply_instrument_codes()
+        missing = [
+            str(column + 1)
+            for column, (spine_type, code) in enumerate(
+                zip(self.document.spine_types, self.document.instrument_codes(), strict=True)
+            )
+            if spine_type == "**kern" and code == "*"
+        ]
+        if missing:
+            box = QMessageBox(self)
+            box.setWindowTitle("Brak kodów instrumentów")
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setText(
+                "Brak kodów instrumentów w spine’ach: " + ", ".join(missing) + "."
+            )
+            box.setInformativeText("Czy mimo to uruchomić filtr addic?")
+            proceed = box.addButton("Kontynuuj", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton("Wróć do edycji", QMessageBox.ButtonRole.RejectRole)
+            box.exec()
+            if box.clickedButton() is not proceed:
+                return
+        before = self.document.to_text()
+        try:
+            self.document = run_addic(self.document)
+        except HumdrumError as error:
+            QMessageBox.warning(self, "Nie można uruchomić addic", str(error))
+            return
+        self.undo_texts.append(before)
+        self.undo_action.setEnabled(True)
+        self._refresh_table()
+        self.statusBar().showMessage("Filtr addic utworzył klasy instrumentów")
 
     def toggle_row_editing(self, row: int) -> None:
         kind = self.editable_row_indexes.get(row)
