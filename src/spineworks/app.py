@@ -107,12 +107,6 @@ class MainWindow(QMainWindow):
         self.propagate_button.clicked.connect(self.propagate_assignments)
         layout.addWidget(self.propagate_button, alignment=Qt.AlignmentFlag.AlignLeft)
 
-        self.instrument_button = QPushButton("Zastosuj dane instrumentów")
-        self.instrument_button.setObjectName("primaryButton")
-        self.instrument_button.setEnabled(False)
-        self.instrument_button.clicked.connect(self.apply_instrument_codes)
-        layout.addWidget(self.instrument_button, alignment=Qt.AlignmentFlag.AlignLeft)
-
         filter_buttons = QHBoxLayout()
         filter_buttons.setSpacing(8)
 
@@ -160,7 +154,6 @@ class MainWindow(QMainWindow):
         self.undo_action.setEnabled(False)
         self.save_action.setEnabled(True)
         self.propagate_button.setEnabled(True)
-        self.instrument_button.setEnabled(True)
         self.addic_button.setEnabled(True)
         self.ig_button.setEnabled(True)
         self.show_group_row = document.header.instrument_group_line is not None
