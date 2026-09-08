@@ -6,4 +6,5 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-
+addic-input.krn
+addic-output.krn
