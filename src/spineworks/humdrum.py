@@ -15,6 +15,7 @@ class HeaderBlock:
     staff_line: int | None
     instrument_name_line: int | None
     instrument_abbr_line: int | None
+    instrument_code_line: int | None
 
     @property
     def line_numbers(self) -> list[int]:
@@ -24,6 +25,7 @@ class HeaderBlock:
             self.staff_line,
             self.instrument_name_line,
             self.instrument_abbr_line,
+            self.instrument_code_line,
         ]
         return [line for line in candidates if line is not None]
 
@@ -94,6 +96,50 @@ class HumdrumDocument:
             self.replace_fields(self.header.staff_line, staffs)
         return changed
 
+    def instrument_codes(self) -> list[str]:
+        if self.header.instrument_code_line is None:
+            return ["*"] * self.spine_count
+        return self.fields(self.header.instrument_code_line)
+
+    def set_instrument_codes(self, values: list[str]) -> bool:
+        self._validate_width(values, "*I")
+        normalized: list[str] = []
+        for spine_type, value in zip(self.spine_types, values, strict=True):
+            if spine_type != "**kern":
+                normalized.append("*")
+                continue
+            code = value.strip()
+            if not code or code == "*":
+                normalized.append("*")
+            elif "\t" in code or "\n" in code or "\r" in code:
+                raise HumdrumError("Kod instrumentu nie może zawierać tabulatora ani nowej linii.")
+            elif code.startswith("*I"):
+                normalized.append(code)
+            elif code.startswith("I"):
+                normalized.append(f"*{code}")
+            else:
+                normalized.append(f"*I{code.lstrip('*')}")
+
+        current = self.instrument_codes()
+        if current == normalized:
+            return False
+
+        if self.header.instrument_code_line is not None:
+            self.replace_fields(self.header.instrument_code_line, normalized)
+            return True
+
+        anchors = [
+            self.header.instrument_abbr_line,
+            self.header.instrument_name_line,
+            self.header.staff_line,
+            self.header.part_line,
+            self.header.exclusive_line,
+        ]
+        insert_after = next(line for line in anchors if line is not None)
+        self.lines.insert(insert_after + 1, "\t".join(normalized))
+        self.header.instrument_code_line = insert_after + 1
+        return True
+
     def to_text(self) -> str:
         text = "\n".join(self.lines)
         return text + ("\n" if self.trailing_newline else "")
@@ -114,6 +160,7 @@ class HumdrumDocument:
             "staff": None,
             "name": None,
             "abbr": None,
+            "code": None,
         }
         for index in range(exclusive_line + 1, len(self.lines)):
             line = self.lines[index]
@@ -132,6 +179,12 @@ class HumdrumDocument:
                 found["name"] = index
             elif found["abbr"] is None and any(value.startswith("*I'") for value in fields):
                 found["abbr"] = index
+            elif found["code"] is None and any(
+                value.startswith("*I")
+                and not value.startswith(('*I"', "*I'", "*IC", "*IG", "*ITr"))
+                for value in fields
+            ):
+                found["code"] = index
 
         return HeaderBlock(
             exclusive_line=exclusive_line,
@@ -139,6 +192,7 @@ class HumdrumDocument:
             staff_line=found["staff"],
             instrument_name_line=found["name"],
             instrument_abbr_line=found["abbr"],
+            instrument_code_line=found["code"],
         )
 
     def _validate_width(self, fields: list[str], label: str) -> None:
@@ -146,4 +200,3 @@ class HumdrumDocument:
             raise HumdrumError(
                 f"Wiersz {label} ma {len(fields)} pól zamiast {self.spine_count}."
             )
-
