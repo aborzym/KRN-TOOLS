@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QTimer, Qt
 from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QFileDialog,
     QHeaderView,
@@ -52,6 +53,7 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         self._build_ui()
         self._apply_theme()
+        QTimer.singleShot(0, self._load_test_file)
 
     def _build_ui(self) -> None:
         toolbar = QToolBar("Plik", self)
@@ -81,6 +83,7 @@ class MainWindow(QMainWindow):
         self.table = QTableWidget(0, 0)
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setSectionsClickable(True)
@@ -101,6 +104,12 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self.statusBar().showMessage("Gotowe")
+
+    def _load_test_file(self) -> None:
+        project_root = Path(__file__).resolve().parents[2]
+        test_path = project_root / "data.krn"
+        if test_path.is_file():
+            self.load_path(test_path)
 
     def open_file(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
@@ -250,7 +259,11 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 if kind and self.document.spine_types[column] == "**kern":
                     editor = QWidget()
-                    editor.setObjectName("instrumentEditor")
+                    editor.setObjectName(
+                        "instrumentEditorActive"
+                        if kind in self.enabled_edit_rows
+                        else "instrumentEditorInactive"
+                    )
                     editor_layout = QHBoxLayout(editor)
                     editor_layout.setContentsMargins(7, 2, 5, 2)
                     editor_layout.setSpacing(1)
@@ -327,12 +340,14 @@ class MainWindow(QMainWindow):
             }
             QPushButton#primaryButton:hover { background: #1b9a61; }
             QPushButton#primaryButton:disabled { background: #26342b; color: #718078; }
-            QWidget#instrumentEditor { background: #183d29; }
+            QWidget#instrumentEditorActive { background: #183d29; }
+            QWidget#instrumentEditorInactive { background: transparent; }
             QLabel#fixedPrefix { background: transparent; color: #63d297; font-weight: 700; }
             QLineEdit {
                 background: transparent; color: #d8f8e4; border: 0;
                 selection-background-color: #177245; padding: 3px 1px;
             }
+            QLineEdit:disabled { color: #d8f8e4; }
             QStatusBar { background: #111a14; color: #9fb2a5; }
             """
         )
