@@ -103,6 +103,15 @@ class HumdrumDocument:
             return ["*"] * self.spine_count
         return self.fields(self.header.instrument_code_line)
 
+    def instrument_classes(self) -> list[str]:
+        for line in self.lines[self.header.exclusive_line + 1 :]:
+            if not line.startswith("*") or line.startswith("**"):
+                break
+            fields = line.split("\t")
+            if any(value.startswith("*IC") for value in fields):
+                return fields
+        return ["*"] * self.spine_count
+
     def set_instrument_names(self, values: list[str]) -> bool:
         return self._set_existing_prefixed_row(
             self.header.instrument_name_line, values, '*I"', "nazwy pełnej"
