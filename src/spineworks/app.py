@@ -277,6 +277,8 @@ class MainWindow(QMainWindow):
             )
         rows.sort(key=lambda row: row[1] if row[1] >= 0 else float("inf"))
 
+        self.table.clearContents()
+        self.table.setRowCount(0)
         self.table.setRowCount(len(rows))
         self.table.setColumnCount(self.document.spine_count)
         for column, spine_type in enumerate(self.document.spine_types):
