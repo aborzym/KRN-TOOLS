@@ -119,7 +119,7 @@ class MainWindow(QMainWindow):
         self.ig_button = QPushButton("IG")
         self.ig_button.setObjectName("primaryButton")
         self.ig_button.setEnabled(False)
-        self.ig_button.clicked.connect(self.show_instrument_group_row)
+        self.ig_button.clicked.connect(self.toggle_instrument_group_row)
         filter_buttons.addWidget(self.ig_button)
         filter_buttons.addStretch(1)
         layout.addLayout(filter_buttons)
@@ -157,6 +157,7 @@ class MainWindow(QMainWindow):
         self.addic_button.setEnabled(True)
         self.ig_button.setEnabled(True)
         self.show_group_row = document.header.instrument_group_line is not None
+        self._sync_ig_button()
         self.file_label.setText(str(path))
         self._refresh_table()
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
@@ -182,6 +183,8 @@ class MainWindow(QMainWindow):
         if not self.undo_texts:
             return
         self.document = HumdrumDocument.from_text(self.undo_texts.pop())
+        self.show_group_row = self.document.header.instrument_group_line is not None
+        self._sync_ig_button()
         self.undo_action.setEnabled(bool(self.undo_texts))
         self._refresh_table()
         self.statusBar().showMessage("Cofnięto ostatnią zmianę")
@@ -275,13 +278,29 @@ class MainWindow(QMainWindow):
             first_field.setFocus()
             first_field.selectAll()
 
-    def show_instrument_group_row(self) -> None:
+    def toggle_instrument_group_row(self) -> None:
+        if self.show_group_row:
+            if self.document.header.instrument_group_line is not None:
+                before = self.document.to_text()
+                self.document.remove_instrument_groups()
+                self.undo_texts.append(before)
+                self.undo_action.setEnabled(True)
+            self.show_group_row = False
+            self.enabled_edit_rows.discard("instrument_group_line")
+            self._sync_ig_button()
+            self._refresh_table()
+            self.statusBar().showMessage("Usunięto wiersz grupy instrumentów")
+            return
         self.show_group_row = True
         self.enabled_edit_rows.add("instrument_group_line")
+        self._sync_ig_button()
         self._refresh_table()
         first_field = next(iter(self.row_inputs["instrument_group_line"].values()))
         first_field.setFocus()
         first_field.selectAll()
+
+    def _sync_ig_button(self) -> None:
+        self.ig_button.setText("Usuń IG" if self.show_group_row else "IG")
 
     def _refresh_table(self) -> None:
         if self.document is None:
