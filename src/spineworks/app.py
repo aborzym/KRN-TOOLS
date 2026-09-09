@@ -505,14 +505,19 @@ class MainWindow(QMainWindow):
             elif line.startswith("!!!OTL:"):
                 title = line.partition(":")[2].strip()
 
-        description = " - ".join(value for value in (composer, title) if value)
-        if not description and self.current_path is not None:
+        if title:
+            description = f"{composer}, {title}" if composer else title
+        elif self.current_path is not None:
             description = self.current_path.name
+        else:
+            description = ""
+
         dirty = self.field_edits_dirty or (
             self.saved_text is not None and self.document.to_text() != self.saved_text
         )
-        marker = " *" if dirty else ""
-        self.setWindowTitle(f"{description}{marker} — SPINEWORKS")
+        prefix = "* " if dirty else ""
+        suffix = f" - {description}" if description else ""
+        self.setWindowTitle(f"{prefix}SPINEWORKS{suffix}")
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         fields = next(
