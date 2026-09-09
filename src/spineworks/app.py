@@ -236,6 +236,11 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Przypisania part i staff są już kompletne")
 
     def undo(self) -> None:
+        if self.field_edits_dirty:
+            self.field_edits_dirty = False
+            self._refresh_table()
+            self.statusBar().showMessage("Cofnięto edycję pola")
+            return
         if not self.undo_texts:
             return
         self.document = HumdrumDocument.from_text(self.undo_texts.pop())
@@ -345,6 +350,8 @@ class MainWindow(QMainWindow):
         kind = self.editable_row_indexes.get(row)
         if kind is None:
             return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
         if kind in self.enabled_edit_rows:
             self.enabled_edit_rows.remove(kind)
         else:
@@ -388,6 +395,7 @@ class MainWindow(QMainWindow):
         if self.document is None:
             return
         self.field_edits_dirty = False
+        self.undo_action.setEnabled(bool(self.undo_texts))
         rows: list[tuple[str, int, str | None, str | None]] = []
         for attribute, label in self.ROW_NAMES.items():
             line_number = getattr(self.document.header, attribute)
@@ -490,6 +498,7 @@ class MainWindow(QMainWindow):
 
     def _mark_field_edited(self) -> None:
         self.field_edits_dirty = True
+        self.undo_action.setEnabled(True)
         self._update_window_title()
 
     def _update_window_title(self) -> None:
