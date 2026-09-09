@@ -640,6 +640,7 @@ class MainWindow(QMainWindow):
             return
         self.field_edits_dirty = False
         self.undo_action.setEnabled(bool(self.undo_texts))
+        self.remove_spine_button.setEnabled(self.document.spine_count > 1)
         rows: list[tuple[str, int, str | None, str | None]] = []
         for attribute, label in self.ROW_NAMES.items():
             line_number = getattr(self.document.header, attribute)
