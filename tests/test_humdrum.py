@@ -142,3 +142,19 @@ def test_recalculates_parts_and_staffs_with_keyboard_pairs() -> None:
     assert document.fields(document.header.staff_line) == [
         "*staff4", "*staff4", "*staff3", "*staff3", "*staff2", "*staff1"
     ]
+
+
+def test_adds_updates_and_removes_system_decoration() -> None:
+    document = HumdrumDocument.from_text(
+        "!!!COM: Test, Composer\n**kern\n*part1\n*staff1\n*-\n"
+    )
+
+    assert document.system_decoration() == ""
+    assert document.set_system_decoration("[(s1)]") is True
+    assert document.system_decoration() == "[(s1)]"
+    assert document.lines[1] == "!!!system-decoration: [(s1)]"
+    assert document.set_system_decoration("[(s1,s2)]") is True
+    assert document.system_decoration() == "[(s1,s2)]"
+    assert document.set_system_decoration("") is True
+    assert document.system_decoration() == ""
+    assert all(not line.startswith("!!!system-decoration:") for line in document.lines)
