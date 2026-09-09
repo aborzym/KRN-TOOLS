@@ -110,6 +110,31 @@ def insert_spine(
     return filtered
 
 
+def remove_spine(document: HumdrumDocument, *, column: int) -> HumdrumDocument:
+    extract = shutil.which("extractx")
+    if extract is None:
+        raise HumdrumError("Nie znaleziono programu extractx w zmiennej PATH.")
+    if document.spine_count <= 1:
+        raise HumdrumError("Nie można usunąć ostatniego spine’u.")
+    if not 0 <= column < document.spine_count:
+        raise HumdrumError("Wybrany spine nie istnieje.")
+
+    selection = [
+        str(index)
+        for index in range(1, document.spine_count + 1)
+        if index != column + 1
+    ]
+    output = _run_filter(
+        [extract, "-s", ",".join(selection)],
+        document.to_text(),
+        "extractx",
+    )
+    filtered = HumdrumDocument.from_text(output)
+    if filtered.spine_count != document.spine_count - 1:
+        raise HumdrumError("Po usunięciu spine’u liczba spine’ów jest nieprawidłowa.")
+    return filtered
+
+
 def _run_filter(arguments: list[str], source: str, name: str) -> str:
     try:
         result = subprocess.run(
