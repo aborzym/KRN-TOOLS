@@ -116,7 +116,7 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().sectionClicked.connect(self.toggle_row_editing)
         layout.addWidget(self.table, 1)
 
-        self.propagate_button = QPushButton("Uzupełnij przypisania spine’ów")
+        self.propagate_button = QPushButton("Uzupełnij i popraw przypisania spine’ów")
         self.propagate_button.setObjectName("primaryButton")
         self.propagate_button.setEnabled(False)
         self.propagate_button.clicked.connect(self.propagate_assignments)
@@ -290,19 +290,43 @@ class MainWindow(QMainWindow):
     def propagate_assignments(self) -> None:
         if self.document is None:
             return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        classes = self.document.instrument_classes()
+        missing = [
+            str(column + 1)
+            for column, (spine_type, instrument_class) in enumerate(
+                zip(self.document.spine_types, classes, strict=True)
+            )
+            if spine_type == "**kern"
+            and (
+                not instrument_class.startswith("*IC")
+                or instrument_class == "*ICUNKNOWN"
+            )
+        ]
+        if missing:
+            QMessageBox.warning(
+                self,
+                "Niekompletne klasy instrumentów",
+                "Najpierw uzupełnij kody instrumentów i uruchom addic.\n\n"
+                "Brak poprawnej klasy *IC… w spine’ach: " + ", ".join(missing) + ".",
+            )
+            return
+
         before = self.document.to_text()
         try:
             changed = self.document.propagate_kern_assignments()
         except HumdrumError as error:
-            QMessageBox.warning(self, "Nie można uzupełnić przypisań", str(error))
+            QMessageBox.warning(self, "Nie można poprawić przypisań", str(error))
             return
         if changed:
             self.undo_texts.append(before)
             self.undo_action.setEnabled(True)
             self._refresh_table()
-            self.statusBar().showMessage("Uzupełniono przypisania part i staff")
+            self.statusBar().showMessage("Uzupełniono i poprawiono przypisania part i staff")
         else:
-            self.statusBar().showMessage("Przypisania part i staff są już kompletne")
+            self.statusBar().showMessage("Przypisania part i staff są już prawidłowe")
 
     def undo(self) -> None:
         if self.field_edits_dirty:
