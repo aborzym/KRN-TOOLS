@@ -8,7 +8,12 @@ from PySide6.QtGui import QAction, QColor, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QButtonGroup,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
+    QFormLayout,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -16,6 +21,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -24,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from spineworks import __version__
-from spineworks.filters import run_addic, run_barnum
+from spineworks.filters import insert_spine, run_addic, run_barnum
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 
 
@@ -136,6 +142,18 @@ class MainWindow(QMainWindow):
         self.barnum_button.setEnabled(False)
         self.barnum_button.clicked.connect(self.apply_barnum)
         filter_buttons.addWidget(self.barnum_button)
+
+        self.empty_spine_button = QPushButton("Dodaj pusty spine")
+        self.empty_spine_button.setObjectName("primaryButton")
+        self.empty_spine_button.setEnabled(False)
+        self.empty_spine_button.clicked.connect(self.add_empty_spine)
+        filter_buttons.addWidget(self.empty_spine_button)
+
+        self.kern_spine_button = QPushButton("Dodaj spine **kern")
+        self.kern_spine_button.setObjectName("primaryButton")
+        self.kern_spine_button.setEnabled(False)
+        self.kern_spine_button.clicked.connect(self.add_kern_spine)
+        filter_buttons.addWidget(self.kern_spine_button)
         filter_buttons.addStretch(1)
         layout.addLayout(filter_buttons)
 
@@ -179,6 +197,8 @@ class MainWindow(QMainWindow):
         self.addic_button.setEnabled(True)
         self.ig_button.setEnabled(True)
         self.barnum_button.setEnabled(True)
+        self.empty_spine_button.setEnabled(True)
+        self.kern_spine_button.setEnabled(True)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
         self.file_label.setText(path.name)
@@ -387,6 +407,140 @@ class MainWindow(QMainWindow):
         self.undo_action.setEnabled(True)
         self._refresh_table()
         self.statusBar().showMessage("Ponownie ponumerowano takty")
+
+    def add_empty_spine(self) -> None:
+        self._add_spine(kern=False)
+
+    def add_kern_spine(self) -> None:
+        self._add_spine(kern=True)
+
+    def _add_spine(self, *, kern: bool) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+        choice = self._ask_spine_insertion(kern=kern)
+        if choice is None:
+            return
+        reference_column, after, spine_type, hidden_rests = choice
+        before = self.document.to_text()
+        try:
+            filtered = insert_spine(
+                self.document,
+                reference_column=reference_column,
+                after=after,
+                spine_type=spine_type,
+                hidden_rests=hidden_rests,
+            )
+        except HumdrumError as error:
+            QMessageBox.warning(self, "Nie można dodać spine’u", str(error))
+            return
+        self.document = filtered
+        self.undo_texts.append(before)
+        self.undo_action.setEnabled(True)
+        self.show_group_row = self.document.header.instrument_group_line is not None
+        self._sync_ig_button()
+        self._refresh_table()
+        self.statusBar().showMessage(f"Dodano spine {spine_type}")
+
+    def _ask_spine_insertion(
+        self, *, kern: bool
+    ) -> tuple[int, bool, str, bool] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Dodaj spine **kern" if kern else "Dodaj pusty spine")
+        dialog.setMinimumWidth(520)
+        form = QFormLayout(dialog)
+
+        location_combo = QComboBox(dialog)
+        location_combo.addItems(self._spine_descriptions())
+        form.addRow("Spine odniesienia:", location_combo)
+
+        position_widget = QWidget(dialog)
+        position_layout = QHBoxLayout(position_widget)
+        position_layout.setContentsMargins(0, 0, 0, 0)
+        before_radio = QRadioButton("Przed", position_widget)
+        after_radio = QRadioButton("Po", position_widget)
+        before_radio.setChecked(True)
+        position_group = QButtonGroup(dialog)
+        position_group.addButton(before_radio)
+        position_group.addButton(after_radio)
+        position_layout.addWidget(before_radio)
+        position_layout.addWidget(after_radio)
+        position_layout.addStretch(1)
+        form.addRow("Położenie:", position_widget)
+
+        type_combo = QComboBox(dialog)
+        if kern:
+            spine_type = "**kern"
+        else:
+            type_combo.addItems(["**fba", "**fbb", "**dynam", "**text", "**fing"])
+            form.addRow("Typ spine’u:", type_combo)
+            spine_type = ""
+
+        hidden_radio = QRadioButton("Z ukrytymi pauzami", dialog)
+        visible_radio = QRadioButton("Z pauzami", dialog)
+        visible_radio.setChecked(True)
+        if kern:
+            rests_widget = QWidget(dialog)
+            rests_layout = QHBoxLayout(rests_widget)
+            rests_layout.setContentsMargins(0, 0, 0, 0)
+            rests_group = QButtonGroup(dialog)
+            rests_group.addButton(visible_radio)
+            rests_group.addButton(hidden_radio)
+            rests_layout.addWidget(visible_radio)
+            rests_layout.addWidget(hidden_radio)
+            rests_layout.addStretch(1)
+            form.addRow("Wypełnienie:", rests_widget)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Dodaj")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        if not kern:
+            spine_type = type_combo.currentText()
+        return (
+            location_combo.currentIndex(),
+            after_radio.isChecked(),
+            spine_type,
+            kern and hidden_radio.isChecked(),
+        )
+
+    def _spine_descriptions(self) -> list[str]:
+        if self.document is None:
+            return []
+        count = self.document.spine_count
+        names = ["*"] * count
+        abbreviations = ["*"] * count
+        codes = self.document.instrument_codes()
+        if self.document.header.instrument_name_line is not None:
+            names = self.document.fields(self.document.header.instrument_name_line)
+        if self.document.header.instrument_abbr_line is not None:
+            abbreviations = self.document.fields(self.document.header.instrument_abbr_line)
+
+        descriptions = []
+        nearest_instrument = ""
+        for column, spine_type in enumerate(self.document.spine_types):
+            if spine_type == "**kern":
+                candidates = (
+                    names[column].removeprefix('*I"'),
+                    abbreviations[column].removeprefix("*I'"),
+                    codes[column].removeprefix("*I"),
+                )
+                nearest_instrument = next(
+                    (value for value in candidates if value and value != "*"),
+                    "bez nazwy",
+                )
+            instrument = nearest_instrument or "brak instrumentu po lewej"
+            descriptions.append(f"{column + 1} — {spine_type} — {instrument}")
+        return descriptions
 
     def toggle_row_editing(self, row: int) -> None:
         kind = self.editable_row_indexes.get(row)
