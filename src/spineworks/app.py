@@ -560,8 +560,11 @@ class MainWindow(QMainWindow):
             QPushButton#dangerButton:hover { background: #914047; }
             QPushButton#dangerButton:pressed { background: #64272b; }
             QWidget#instrumentEditorActive { background: #183d29; }
-            QWidget#instrumentEditorKernInactive { background: #18271e; }
+            QWidget#instrumentEditorKernInactive { background: transparent; }
             QLabel#fixedPrefix { background: transparent; color: #63d297; font-weight: 700; }
+            QWidget#instrumentEditorKernInactive QLabel#fixedPrefix {
+                color: #d8f8e4; font-weight: 400;
+            }
             QLineEdit {
                 background: transparent; color: #d8f8e4; border: 0;
                 selection-background-color: #177245; padding: 3px 1px;
