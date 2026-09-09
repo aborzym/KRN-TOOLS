@@ -72,9 +72,9 @@ def insert_spine(
     spine_type: str,
     hidden_rests: bool = False,
 ) -> HumdrumDocument:
-    extract = shutil.which("extract")
+    extract = shutil.which("extractx")
     if extract is None:
-        raise HumdrumError("Nie znaleziono programu extract w zmiennej PATH.")
+        raise HumdrumError("Nie znaleziono programu extractx w zmiennej PATH.")
     if not 0 <= reference_column < document.spine_count:
         raise HumdrumError("Wybrany spine nie istnieje.")
 
@@ -86,7 +86,7 @@ def insert_spine(
     output = _run_filter(
         [extract, "-s", selector],
         document.to_text(),
-        "extract",
+        "extractx",
     )
     if spine_type == "**kern":
         restfill = shutil.which("restfill")
@@ -99,7 +99,7 @@ def insert_spine(
         filtered = HumdrumDocument.from_text(output)
         types = filtered.spine_types
         if insertion_column >= len(types) or types[insertion_column] != "**blank":
-            raise HumdrumError("Program extract nie utworzył oczekiwanego spine’u **blank.")
+            raise HumdrumError("Program extractx nie utworzył oczekiwanego spine’u **blank.")
         types[insertion_column] = spine_type
         filtered.replace_fields(filtered.header.exclusive_line, types)
 
