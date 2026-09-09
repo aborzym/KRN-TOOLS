@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from spineworks import __version__
-from spineworks.filters import insert_spine, run_addic, run_barnum
+from spineworks.filters import insert_spine, remove_spine, run_addic, run_barnum
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 
 
@@ -154,6 +154,12 @@ class MainWindow(QMainWindow):
         self.kern_spine_button.setEnabled(False)
         self.kern_spine_button.clicked.connect(self.add_kern_spine)
         filter_buttons.addWidget(self.kern_spine_button)
+
+        self.remove_spine_button = QPushButton("Usuń spine")
+        self.remove_spine_button.setObjectName("dangerButton")
+        self.remove_spine_button.setEnabled(False)
+        self.remove_spine_button.clicked.connect(self.remove_selected_spine)
+        filter_buttons.addWidget(self.remove_spine_button)
         filter_buttons.addStretch(1)
         layout.addLayout(filter_buttons)
 
@@ -199,6 +205,7 @@ class MainWindow(QMainWindow):
         self.barnum_button.setEnabled(True)
         self.empty_spine_button.setEnabled(True)
         self.kern_spine_button.setEnabled(True)
+        self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
         self.file_label.setText(path.name)
@@ -407,6 +414,49 @@ class MainWindow(QMainWindow):
         self.undo_action.setEnabled(True)
         self._refresh_table()
         self.statusBar().showMessage("Ponownie ponumerowano takty")
+
+    def remove_selected_spine(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Usuń spine")
+        dialog.setMinimumWidth(520)
+        form = QFormLayout(dialog)
+        spine_combo = QComboBox(dialog)
+        spine_combo.addItems(self._spine_descriptions())
+        form.addRow("Spine do usunięcia:", spine_combo)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Usuń")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        column = spine_combo.currentIndex()
+        description = spine_combo.currentText()
+        before = self.document.to_text()
+        try:
+            filtered = remove_spine(self.document, column=column)
+        except HumdrumError as error:
+            QMessageBox.warning(self, "Nie można usunąć spine’u", str(error))
+            return
+        self.document = filtered
+        self.undo_texts.append(before)
+        self.undo_action.setEnabled(True)
+        self.remove_spine_button.setEnabled(self.document.spine_count > 1)
+        self.show_group_row = self.document.header.instrument_group_line is not None
+        self._sync_ig_button()
+        self._refresh_table()
+        self.statusBar().showMessage(f"Usunięto spine: {description}")
 
     def add_empty_spine(self) -> None:
         self._add_spine(kern=False)
