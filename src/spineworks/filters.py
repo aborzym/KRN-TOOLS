@@ -64,6 +64,22 @@ def run_barnum(document: HumdrumDocument) -> HumdrumDocument:
     return HumdrumDocument.from_text(output)
 
 
+def remove_system_breaks(document: HumdrumDocument) -> HumdrumDocument:
+    rid = shutil.which("rid")
+    if rid is None:
+        raise HumdrumError("Nie znaleziono programu rid w zmiennej PATH.")
+
+    break_records = {"!!pagebreak:original", "!!linebreak:original"}
+    source_lines = [
+        line for line in document.to_text().splitlines() if line.strip() not in break_records
+    ]
+    source = "\n".join(source_lines)
+    if document.trailing_newline:
+        source += "\n"
+    output = _run_filter([rid, "-glid"], source, "rid")
+    return HumdrumDocument.from_text(output)
+
+
 def insert_spine(
     document: HumdrumDocument,
     *,
