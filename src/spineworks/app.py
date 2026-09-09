@@ -30,7 +30,13 @@ from PySide6.QtWidgets import (
 )
 
 from spineworks import __version__
-from spineworks.filters import insert_spine, remove_spine, run_addic, run_barnum
+from spineworks.filters import (
+    insert_spine,
+    remove_spine,
+    remove_system_breaks,
+    run_addic,
+    run_barnum,
+)
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 
 
@@ -160,6 +166,12 @@ class MainWindow(QMainWindow):
         self.barnum_button.clicked.connect(self.apply_barnum)
         filter_buttons.addWidget(self.barnum_button)
 
+        self.breaks_button = QPushButton("Usuń łamania systemów")
+        self.breaks_button.setObjectName("dangerButton")
+        self.breaks_button.setEnabled(False)
+        self.breaks_button.clicked.connect(self.remove_system_break_records)
+        filter_buttons.addWidget(self.breaks_button)
+
         self.empty_spine_button = QPushButton("Dodaj pusty spine")
         self.empty_spine_button.setObjectName("primaryButton")
         self.empty_spine_button.setEnabled(False)
@@ -221,6 +233,7 @@ class MainWindow(QMainWindow):
         self.addic_button.setEnabled(True)
         self.ig_button.setEnabled(True)
         self.barnum_button.setEnabled(True)
+        self.breaks_button.setEnabled(True)
         self.empty_spine_button.setEnabled(True)
         self.kern_spine_button.setEnabled(True)
         self.remove_spine_button.setEnabled(document.spine_count > 1)
@@ -459,6 +472,28 @@ class MainWindow(QMainWindow):
         self.undo_action.setEnabled(True)
         self._refresh_table()
         self.statusBar().showMessage("Ponownie ponumerowano takty")
+
+    def remove_system_break_records(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+        before = self.document.to_text()
+        try:
+            filtered = remove_system_breaks(self.document)
+        except HumdrumError as error:
+            QMessageBox.warning(self, "Nie można usunąć łamań systemów", str(error))
+            return
+        if filtered.to_text() == before:
+            self.statusBar().showMessage("Dokument nie zawiera łamań systemów")
+            return
+        self.document = filtered
+        self.undo_texts.append(before)
+        self.undo_action.setEnabled(True)
+        self.show_group_row = self.document.header.instrument_group_line is not None
+        self._sync_ig_button()
+        self._refresh_table()
+        self.statusBar().showMessage("Usunięto łamania systemów")
 
     def remove_selected_spine(self) -> None:
         if self.document is None:
