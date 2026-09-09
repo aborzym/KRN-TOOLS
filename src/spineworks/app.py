@@ -116,6 +116,22 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().sectionClicked.connect(self.toggle_row_editing)
         layout.addWidget(self.table, 1)
 
+        decoration_row = QWidget(self)
+        decoration_row.setObjectName("decorationRow")
+        decoration_layout = QHBoxLayout(decoration_row)
+        decoration_layout.setContentsMargins(0, 0, 0, 0)
+        decoration_layout.setSpacing(10)
+        decoration_label = QLabel("System decoration:", decoration_row)
+        decoration_label.setObjectName("decorationLabel")
+        self.system_decoration_input = QLineEdit(decoration_row)
+        self.system_decoration_input.setObjectName("systemDecorationInput")
+        self.system_decoration_input.setPlaceholderText("np. [(s1,s2),s3]")
+        self.system_decoration_input.setEnabled(False)
+        self.system_decoration_input.textChanged.connect(self._mark_field_edited)
+        decoration_layout.addWidget(decoration_label)
+        decoration_layout.addWidget(self.system_decoration_input, 1)
+        layout.addWidget(decoration_row)
+
         self.propagate_button = QPushButton("Uzupełnij i popraw przypisania spine’ów")
         self.propagate_button.setObjectName("primaryButton")
         self.propagate_button.setEnabled(False)
@@ -199,6 +215,7 @@ class MainWindow(QMainWindow):
         self.undo_action.setEnabled(False)
         self.save_action.setEnabled(True)
         self.save_as_action.setEnabled(True)
+        self.system_decoration_input.setEnabled(True)
         self.propagate_button.setEnabled(True)
         self.addic_button.setEnabled(True)
         self.ig_button.setEnabled(True)
@@ -364,6 +381,9 @@ class MainWindow(QMainWindow):
                 changed |= self.document.set_instrument_groups(
                     self._row_values("instrument_group_line")
                 )
+            changed |= self.document.set_system_decoration(
+                self.system_decoration_input.text()
+            )
         except HumdrumError as error:
             QMessageBox.warning(self, "Nie można zastosować danych", str(error))
             return False
@@ -665,6 +685,9 @@ class MainWindow(QMainWindow):
         self.field_edits_dirty = False
         self.undo_action.setEnabled(bool(self.undo_texts))
         self.remove_spine_button.setEnabled(self.document.spine_count > 1)
+        self.system_decoration_input.blockSignals(True)
+        self.system_decoration_input.setText(self.document.system_decoration())
+        self.system_decoration_input.blockSignals(False)
         rows: list[tuple[str, int, str | None, str | None]] = []
         for attribute, label in self.ROW_NAMES.items():
             line_number = getattr(self.document.header, attribute)
@@ -851,6 +874,14 @@ class MainWindow(QMainWindow):
             QToolButton { padding: 7px 12px; border-radius: 6px; }
             QToolButton:hover { background: #24372a; }
             QLabel#fileLabel { color: #b7cabe; font-size: 14px; padding: 4px; }
+            QWidget#decorationRow { background: transparent; }
+            QLabel#decorationLabel { color: #b7cabe; font-weight: 600; }
+            QLineEdit#systemDecorationInput {
+                background: #18271e; color: #d8f8e4;
+                border: 1px solid #304536; border-radius: 6px; padding: 7px 9px;
+            }
+            QLineEdit#systemDecorationInput:focus { border-color: #35a36d; }
+            QLineEdit#systemDecorationInput:disabled { color: #718078; }
             QTableWidget {
                 background: #121c16; alternate-background-color: #17231b;
                 gridline-color: #304536; border: 1px solid #304536;
