@@ -469,21 +469,14 @@ class MainWindow(QMainWindow):
         position_layout.addStretch(1)
         form.addRow("Położenie:", position_widget)
 
-        type_combo = QComboBox(dialog)
         if kern:
             spine_type = "**kern"
-        else:
-            type_combo.addItems(["**fba", "**fbb", "**dynam", "**text", "**fing"])
-            form.addRow("Typ spine’u:", type_combo)
-            spine_type = ""
-
-        hidden_radio = QRadioButton("Z ukrytymi pauzami", dialog)
-        visible_radio = QRadioButton("Z pauzami", dialog)
-        visible_radio.setChecked(True)
-        if kern:
             rests_widget = QWidget(dialog)
             rests_layout = QHBoxLayout(rests_widget)
             rests_layout.setContentsMargins(0, 0, 0, 0)
+            visible_radio = QRadioButton("Z pauzami", rests_widget)
+            hidden_radio = QRadioButton("Z ukrytymi pauzami", rests_widget)
+            visible_radio.setChecked(True)
             rests_group = QButtonGroup(dialog)
             rests_group.addButton(visible_radio)
             rests_group.addButton(hidden_radio)
@@ -491,6 +484,11 @@ class MainWindow(QMainWindow):
             rests_layout.addWidget(hidden_radio)
             rests_layout.addStretch(1)
             form.addRow("Wypełnienie:", rests_widget)
+        else:
+            type_combo = QComboBox(dialog)
+            type_combo.addItems(["**fba", "**fbb", "**dynam", "**text", "**fing"])
+            form.addRow("Typ spine’u:", type_combo)
+            spine_type = ""
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
