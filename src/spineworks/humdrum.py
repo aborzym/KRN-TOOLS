@@ -70,31 +70,59 @@ class HumdrumDocument:
         if self.header.part_line is None or self.header.staff_line is None:
             raise HumdrumError("Brak wiersza *part… albo *staff… w nagłówku pliku.")
 
-        parts = self.fields(self.header.part_line)
-        staffs = self.fields(self.header.staff_line)
-        self._validate_width(parts, "*part")
-        self._validate_width(staffs, "*staff")
+        spine_types = self.spine_types
+        classes = self.instrument_classes()
+        names = (
+            self.fields(self.header.instrument_name_line)
+            if self.header.instrument_name_line is not None
+            else ["*"] * self.spine_count
+        )
+        kern_columns = [
+            column for column, spine_type in enumerate(spine_types) if spine_type == "**kern"
+        ]
 
-        changed = False
-        current_part: str | None = None
-        current_staff: str | None = None
+        staff_numbers = {
+            column: number
+            for number, column in enumerate(reversed(kern_columns), start=1)
+        }
+        part_numbers: dict[int, int] = {}
+        current_part = 0
+        right_kern: int | None = None
+        for column in reversed(kern_columns):
+            shares_keyboard_part = False
+            if right_kern is not None:
+                between = spine_types[column + 1 : right_kern]
+                same_name = names[column] != "*" and names[column] == names[right_kern]
+                keyboard_class = (
+                    classes[column] == "*ICklav" and classes[right_kern] == "*ICklav"
+                )
+                shares_keyboard_part = (
+                    all(spine_type == "**fing" for spine_type in between)
+                    and same_name
+                    and keyboard_class
+                )
+            if not shares_keyboard_part:
+                current_part += 1
+            part_numbers[column] = current_part
+            right_kern = column
 
-        for column, spine_type in enumerate(self.spine_types):
+        parts = ["*"] * self.spine_count
+        staffs = ["*"] * self.spine_count
+        active_part: int | None = None
+        active_staff: int | None = None
+        for column, spine_type in enumerate(spine_types):
             if spine_type == "**kern":
-                current_part = parts[column]
-                current_staff = staffs[column]
-                continue
+                active_part = part_numbers[column]
+                active_staff = staff_numbers[column]
+            if active_part is not None and active_staff is not None:
+                parts[column] = f"*part{active_part}"
+                staffs[column] = f"*staff{active_staff}"
 
-            if current_part is None or current_staff is None:
-                continue
-
-            if parts[column] != current_part:
-                parts[column] = current_part
-                changed = True
-            if staffs[column] != current_staff:
-                staffs[column] = current_staff
-                changed = True
-
+        old_parts = self.fields(self.header.part_line)
+        old_staffs = self.fields(self.header.staff_line)
+        self._validate_width(old_parts, "*part")
+        self._validate_width(old_staffs, "*staff")
+        changed = parts != old_parts or staffs != old_staffs
         if changed:
             self.replace_fields(self.header.part_line, parts)
             self.replace_fields(self.header.staff_line, staffs)
