@@ -79,6 +79,12 @@ class MainWindow(QMainWindow):
         self.save_action.triggered.connect(self.save_file)
         toolbar.addAction(self.save_action)
 
+        self.save_as_action = QAction("Zapisz jako…", self)
+        self.save_as_action.setShortcut(QKeySequence.StandardKey.SaveAs)
+        self.save_as_action.setEnabled(False)
+        self.save_as_action.triggered.connect(self.save_as_file)
+        toolbar.addAction(self.save_as_action)
+
         self.undo_action = QAction("Cofnij", self)
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.setEnabled(False)
@@ -168,6 +174,7 @@ class MainWindow(QMainWindow):
         self.enabled_edit_rows.clear()
         self.undo_action.setEnabled(False)
         self.save_action.setEnabled(True)
+        self.save_as_action.setEnabled(True)
         self.propagate_button.setEnabled(True)
         self.addic_button.setEnabled(True)
         self.ig_button.setEnabled(True)
@@ -191,6 +198,37 @@ class MainWindow(QMainWindow):
         self.saved_text = self.document.to_text()
         self._update_window_title()
         self.statusBar().showMessage(f"Zapisano {self.current_path.name}")
+        return True
+
+    def save_as_file(self) -> bool:
+        if self.document is None or self.current_path is None:
+            return False
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return False
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Zapisz plik Humdrum jako",
+            str(self.current_path),
+            "Pliki Humdrum (*.krn);;Wszystkie pliki (*)",
+        )
+        if not filename:
+            return False
+
+        path = Path(filename)
+        if path.suffix.lower() != ".krn":
+            path = path.with_name(path.name + ".krn")
+        try:
+            path.write_text(self.document.to_text(), encoding="utf-8")
+        except OSError as error:
+            QMessageBox.critical(self, "Nie można zapisać pliku", str(error))
+            return False
+
+        self.current_path = path
+        self.saved_text = self.document.to_text()
+        self.file_label.setText(path.name)
+        self._update_window_title()
+        self.statusBar().showMessage(f"Zapisano jako {path.name}")
         return True
 
     def _confirm_unsaved_changes(self) -> bool:
