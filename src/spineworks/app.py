@@ -49,6 +49,7 @@ class MainWindow(QMainWindow):
         self.document: HumdrumDocument | None = None
         self.current_path: Path | None = None
         self.saved_text: str | None = None
+        self.field_edits_dirty = False
         self.undo_texts: list[str] = []
         self.row_inputs: dict[str, dict[int, QLineEdit]] = {}
         self.enabled_edit_rows: set[str] = set()
@@ -169,7 +170,7 @@ class MainWindow(QMainWindow):
         self.barnum_button.setEnabled(True)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
-        self.file_label.setText(str(path))
+        self.file_label.setText(path.name)
         self._refresh_table()
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
 
@@ -184,6 +185,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Nie można zapisać pliku", str(error))
             return False
         self.saved_text = self.document.to_text()
+        self._update_window_title()
         self.statusBar().showMessage(f"Zapisano {self.current_path.name}")
         return True
 
@@ -385,6 +387,7 @@ class MainWindow(QMainWindow):
     def _refresh_table(self) -> None:
         if self.document is None:
             return
+        self.field_edits_dirty = False
         rows: list[tuple[str, int, str | None, str | None]] = []
         for attribute, label in self.ROW_NAMES.items():
             line_number = getattr(self.document.header, attribute)
@@ -467,6 +470,7 @@ class MainWindow(QMainWindow):
                     field.setFrame(False)
                     field.installEventFilter(self)
                     field.setEnabled(kind in self.enabled_edit_rows)
+                    field.textChanged.connect(self._mark_field_edited)
                     editor_layout.addWidget(prefix)
                     editor_layout.addWidget(field, 1)
                     self.row_inputs.setdefault(kind, {})[column] = field
@@ -482,6 +486,33 @@ class MainWindow(QMainWindow):
             for current, following in zip(editable_fields, editable_fields[1:], strict=False):
                 QWidget.setTabOrder(current, following)
         self.table.resizeRowsToContents()
+        self._update_window_title()
+
+    def _mark_field_edited(self) -> None:
+        self.field_edits_dirty = True
+        self._update_window_title()
+
+    def _update_window_title(self) -> None:
+        if self.document is None:
+            self.setWindowTitle("SPINEWORKS")
+            return
+
+        composer = ""
+        title = ""
+        for line in self.document.to_text().splitlines():
+            if line.startswith("!!!COM:"):
+                composer = line.partition(":")[2].strip().split(",", 1)[0].strip()
+            elif line.startswith("!!!OTL:"):
+                title = line.partition(":")[2].strip()
+
+        description = " - ".join(value for value in (composer, title) if value)
+        if not description and self.current_path is not None:
+            description = self.current_path.name
+        dirty = self.field_edits_dirty or (
+            self.saved_text is not None and self.document.to_text() != self.saved_text
+        )
+        marker = " *" if dirty else ""
+        self.setWindowTitle(f"{description}{marker} — SPINEWORKS")
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         fields = next(
