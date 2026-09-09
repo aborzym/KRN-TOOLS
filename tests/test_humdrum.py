@@ -123,3 +123,22 @@ def test_uploaded_file_has_sixteen_spines() -> None:
     document = HumdrumDocument.from_path(sample)
 
     assert document.spine_count == 16
+
+
+def test_recalculates_parts_and_staffs_with_keyboard_pairs() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**fing\t**kern\t**text\t**kern\t**kern\n"
+        "*part9\t*\t*part8\t*\t*part7\t*part6\n"
+        "*staff9\t*\t*staff8\t*\t*staff7\t*staff6\n"
+        '*I"Organo\t*\t*I"Organo\t*\t*I"Piano\t*I"Piano\n'
+        "*ICklav\t*\t*ICklav\t*\t*ICklav\t*ICklav\n"
+        "=1\t=1\t=1\t=1\t=1\t=1\n"
+    )
+
+    assert document.propagate_kern_assignments() is True
+    assert document.fields(document.header.part_line) == [
+        "*part2", "*part2", "*part2", "*part2", "*part1", "*part1"
+    ]
+    assert document.fields(document.header.staff_line) == [
+        "*staff4", "*staff4", "*staff3", "*staff3", "*staff2", "*staff1"
+    ]
