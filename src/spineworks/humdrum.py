@@ -253,6 +253,37 @@ class HumdrumDocument:
         self.header.instrument_code_line = insert_after + 1
         return True
 
+    def system_decoration(self) -> str:
+        prefix = "!!!system-decoration:"
+        for line in self.lines:
+            if line.startswith(prefix):
+                return line[len(prefix) :].strip()
+        return ""
+
+    def set_system_decoration(self, value: str) -> bool:
+        prefix = "!!!system-decoration:"
+        normalized = value.strip()
+        matches = [
+            index for index, line in enumerate(self.lines) if line.startswith(prefix)
+        ]
+        if normalized:
+            replacement = f"{prefix} {normalized}"
+            if len(matches) == 1 and self.lines[matches[0]] == replacement:
+                return False
+            if matches:
+                self.lines[matches[0]] = replacement
+                for index in reversed(matches[1:]):
+                    del self.lines[index]
+            else:
+                self.lines.insert(self.header.exclusive_line, replacement)
+        else:
+            if not matches:
+                return False
+            for index in reversed(matches):
+                del self.lines[index]
+        self.header = self._find_header()
+        return True
+
     def to_text(self) -> str:
         text = "\n".join(self.lines)
         return text + ("\n" if self.trailing_newline else "")
