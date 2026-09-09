@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from spineworks import __version__
 from spineworks.filters import run_addic, run_barnum
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 
@@ -133,6 +134,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(filter_buttons)
 
         self.setCentralWidget(central)
+        version_label = QLabel(f"© 2026 Andrzej Borzym · SPINEWORKS {__version__}")
+        version_label.setObjectName("versionLabel")
+        self.statusBar().addPermanentWidget(version_label)
         self.statusBar().showMessage("Gotowe")
 
     def _load_test_file(self) -> None:
@@ -616,6 +620,10 @@ class MainWindow(QMainWindow):
             }
             QLineEdit:disabled { color: #d8f8e4; }
             QStatusBar { background: #111a14; color: #9fb2a5; }
+            QLabel#versionLabel {
+                background: transparent; color: #718078;
+                font-size: 11px; padding: 0 8px;
+            }
             """
         )
 
