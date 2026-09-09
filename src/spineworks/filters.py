@@ -62,3 +62,69 @@ def run_barnum(document: HumdrumDocument) -> HumdrumDocument:
             raise HumdrumError(f"Filtr barnum {mode} nie zwrócił danych.")
         output = result.stdout
     return HumdrumDocument.from_text(output)
+
+
+def insert_spine(
+    document: HumdrumDocument,
+    *,
+    reference_column: int,
+    after: bool,
+    spine_type: str,
+    hidden_rests: bool = False,
+) -> HumdrumDocument:
+    extract = shutil.which("extract")
+    if extract is None:
+        raise HumdrumError("Nie znaleziono programu extract w zmiennej PATH.")
+    if not 0 <= reference_column < document.spine_count:
+        raise HumdrumError("Wybrany spine nie istnieje.")
+
+    insertion_column = reference_column + (1 if after else 0)
+    selection = list(range(1, document.spine_count + 1))
+    selection.insert(insertion_column, 0)
+    selector = ",".join(str(value) for value in selection)
+
+    output = _run_filter(
+        [extract, "-s", selector],
+        document.to_text(),
+        "extract",
+    )
+    if spine_type == "**kern":
+        restfill = shutil.which("restfill")
+        if restfill is None:
+            raise HumdrumError("Nie znaleziono programu restfill w zmiennej PATH.")
+        arguments = [restfill, "-yi" if hidden_rests else "-i", "blank"]
+        output = _run_filter(arguments, output, "restfill")
+        filtered = HumdrumDocument.from_text(output)
+    else:
+        filtered = HumdrumDocument.from_text(output)
+        types = filtered.spine_types
+        if insertion_column >= len(types) or types[insertion_column] != "**blank":
+            raise HumdrumError("Program extract nie utworzył oczekiwanego spine’u **blank.")
+        types[insertion_column] = spine_type
+        filtered.replace_fields(filtered.header.exclusive_line, types)
+
+    if filtered.spine_count != document.spine_count + 1:
+        raise HumdrumError("Po dodaniu spine’u liczba spine’ów jest nieprawidłowa.")
+    if filtered.spine_types[insertion_column] != spine_type:
+        raise HumdrumError(f"Nowy spine nie ma oczekiwanego typu {spine_type}.")
+    return filtered
+
+
+def _run_filter(arguments: list[str], source: str, name: str) -> str:
+    try:
+        result = subprocess.run(
+            arguments,
+            input=source,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise HumdrumError(f"Filtr {name} nie zakończył pracy w ciągu 30 sekund.") from error
+    if result.returncode != 0:
+        message = result.stderr.strip() or f"Kod zakończenia: {result.returncode}"
+        raise HumdrumError(f"Filtr {name} zakończył się błędem:\n{message}")
+    if not result.stdout.strip():
+        raise HumdrumError(f"Filtr {name} nie zwrócił danych.")
+    return result.stdout
