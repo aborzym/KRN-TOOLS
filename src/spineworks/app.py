@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QTimer, Qt
-from PySide6.QtGui import QAction, QColor, QKeySequence
+from PySide6.QtGui import QAction, QColor, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.document: HumdrumDocument | None = None
         self.current_path: Path | None = None
+        self.saved_text: str | None = None
         self.undo_texts: list[str] = []
         self.row_inputs: dict[str, dict[int, QLineEdit]] = {}
         self.enabled_edit_rows: set[str] = set()
@@ -147,6 +148,8 @@ class MainWindow(QMainWindow):
             self.load_path(Path(filename))
 
     def load_path(self, path: Path) -> None:
+        if self.document is not None and not self._confirm_unsaved_changes():
+            return
         try:
             document = HumdrumDocument.from_path(path)
         except (OSError, UnicodeError, HumdrumError) as error:
@@ -155,6 +158,7 @@ class MainWindow(QMainWindow):
 
         self.document = document
         self.current_path = path
+        self.saved_text = document.to_text()
         self.undo_texts.clear()
         self.enabled_edit_rows.clear()
         self.undo_action.setEnabled(False)
@@ -169,17 +173,48 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
 
-    def save_file(self) -> None:
+    def save_file(self) -> bool:
         if self.document is None or self.current_path is None:
-            return
+            return False
         if not self.apply_instrument_codes(show_unchanged_status=False):
-            return
+            return False
         try:
             self.current_path.write_text(self.document.to_text(), encoding="utf-8")
         except OSError as error:
             QMessageBox.critical(self, "Nie można zapisać pliku", str(error))
-            return
+            return False
+        self.saved_text = self.document.to_text()
         self.statusBar().showMessage(f"Zapisano {self.current_path.name}")
+        return True
+
+    def _confirm_unsaved_changes(self) -> bool:
+        if self.document is None:
+            return True
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return False
+        if self.document.to_text() == self.saved_text:
+            return True
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Niezapisane zmiany")
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setText("Dokument zawiera niezapisane zmiany.")
+        box.setInformativeText("Czy zapisać je przed kontynuowaniem?")
+        save_button = box.addButton("Zapisz", QMessageBox.ButtonRole.AcceptRole)
+        discard_button = box.addButton("Nie zapisuj", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("Anuluj", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(save_button)
+        box.exec()
+
+        if box.clickedButton() is save_button:
+            return self.save_file()
+        return box.clickedButton() is discard_button
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if self._confirm_unsaved_changes():
+            event.accept()
+        else:
+            event.ignore()
 
     def propagate_assignments(self) -> None:
         if self.document is None:
@@ -487,8 +522,12 @@ class MainWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:  # noqa: N802
+        previous_path = self.current_path
         self.load_path(Path(event.mimeData().urls()[0].toLocalFile()))
-        event.acceptProposedAction()
+        if self.current_path != previous_path:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def _apply_theme(self) -> None:
         self.setStyleSheet(
