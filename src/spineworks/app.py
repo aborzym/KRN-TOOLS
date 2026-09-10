@@ -820,7 +820,12 @@ class MainWindow(QMainWindow):
                     field = QLineEdit("" if value == "*" else value.removeprefix(fixed_prefix))
                     field.setFrame(False)
                     field.installEventFilter(self)
-                    field.setEnabled(kind in self.enabled_edit_rows)
+                    active = kind in self.enabled_edit_rows
+                    field.setEnabled(active)
+                    field.setFocusPolicy(
+                        Qt.FocusPolicy.StrongFocus if active else Qt.FocusPolicy.NoFocus
+                    )
+                    field.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not active)
                     field.textChanged.connect(self._mark_field_edited)
                     editor_layout.addWidget(prefix)
                     editor_layout.addWidget(field, 1)
@@ -832,10 +837,14 @@ class MainWindow(QMainWindow):
                 if self.document.spine_types[column] == "**kern":
                     item.setBackground(QColor("#18271e"))
                 self.table.setItem(row, column, item)
-        for fields in self.row_inputs.values():
-            editable_fields = list(fields.values())
-            for current, following in zip(editable_fields, editable_fields[1:], strict=False):
-                QWidget.setTabOrder(current, following)
+        editable_fields = [
+            field
+            for kind, fields in self.row_inputs.items()
+            if kind in self.enabled_edit_rows
+            for field in fields.values()
+        ]
+        for current, following in zip(editable_fields, editable_fields[1:], strict=False):
+            QWidget.setTabOrder(current, following)
         self.table.resizeRowsToContents()
         self._update_window_title()
 
@@ -872,18 +881,20 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{prefix}SPINEWORKS{suffix}")
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        fields = next(
-            (list(row.values()) for row in self.row_inputs.values() if watched in row.values()),
-            [],
-        )
+        editable_fields = [
+            field
+            for kind, fields in self.row_inputs.items()
+            if kind in self.enabled_edit_rows
+            for field in fields.values()
+        ]
         if (
-            watched in fields
+            watched in editable_fields
             and event.type() == QEvent.Type.KeyPress
             and event.key() in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab)
         ):
-            current = fields.index(watched)
+            current = editable_fields.index(watched)
             step = -1 if event.key() == Qt.Key.Key_Backtab else 1
-            target = fields[(current + step) % len(fields)]
+            target = editable_fields[(current + step) % len(editable_fields)]
             target.setFocus()
             target.selectAll()
             for kind, row_fields in self.row_inputs.items():
@@ -900,7 +911,15 @@ class MainWindow(QMainWindow):
                         )
                         return True
             return True
-        if watched in fields and event.type() == QEvent.Type.MouseButtonPress:
+        if (
+            watched in editable_fields
+            and event.type() == QEvent.Type.MouseButtonDblClick
+            and watched.cursorPositionAt(event.position().toPoint()) >= len(watched.text())
+        ):
+            watched.setCursorPosition(len(watched.text()))
+            watched.deselect()
+            return True
+        if watched in editable_fields and event.type() == QEvent.Type.MouseButtonPress:
             QTimer.singleShot(0, watched.selectAll)
         return super().eventFilter(watched, event)
 
@@ -956,7 +975,7 @@ class MainWindow(QMainWindow):
             QPushButton#dangerButton:hover { background: #914047; }
             QPushButton#dangerButton:pressed { background: #64272b; }
             QPushButton#dangerButton:disabled {
-                background: #26342b; color: #718078; border-color: #35443a;
+                background: #38292c; color: #8b7074; border-color: #594044;
             }
             QWidget#instrumentEditorActive { background: #183d29; }
             QWidget#instrumentEditorKernInactive { background: transparent; }
