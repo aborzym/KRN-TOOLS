@@ -68,6 +68,7 @@ def test_reports_missing_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("PATH", "")
     monkeypatch.delenv("SPINEWORKS_HUMDRUM_PATH", raising=False)
+    monkeypatch.setattr(filters.shutil, "which", lambda *args, **kwargs: None)
 
     with pytest.raises(HumdrumError, match="Nie znaleziono programu addic"):
         find_humdrum_tool("addic")
