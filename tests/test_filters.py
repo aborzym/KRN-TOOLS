@@ -77,3 +77,24 @@ def test_addic_does_not_write_diagnostic_files(monkeypatch: pytest.MonkeyPatch) 
     filtered = filters.run_addic(HumdrumDocument.from_text(source))
 
     assert filtered.instrument_classes() == ["*ICstr"]
+
+
+def test_filter_adds_tool_directory_to_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tool_directory = tmp_path / "humdrum" / "bin"
+    rid = tool_directory / "rid"
+    rid_helper = tool_directory / "rid_"
+    make_executable(rid)
+    make_executable(rid_helper)
+    rid.write_text('#!/bin/sh\nexec rid_ "$@"\n', encoding="utf-8")
+    rid_helper.write_text("#!/bin/sh\ncat\n", encoding="utf-8")
+    monkeypatch.setattr(filters, "find_humdrum_tool", lambda name: str(rid))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    document = HumdrumDocument.from_text(
+        "**kern\n!!linebreak:original\n\n4c\n*-\n"
+    )
+
+    filtered = filters.remove_system_breaks(document)
+
+    assert "!!linebreak:original" not in filtered.to_text()
