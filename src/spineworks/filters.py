@@ -39,6 +39,16 @@ def find_humdrum_tool(name: str) -> str:
     )
 
 
+def _tool_environment(executable: str) -> dict[str, str]:
+    environment = os.environ.copy()
+    tool_directory = str(Path(executable).resolve().parent)
+    current_path = environment.get("PATH", "")
+    environment["PATH"] = os.pathsep.join(
+        part for part in (tool_directory, current_path) if part
+    )
+    return environment
+
+
 def run_addic(document: HumdrumDocument) -> HumdrumDocument:
     executable = find_humdrum_tool("addic")
     source_text = document.to_text()
@@ -50,6 +60,7 @@ def run_addic(document: HumdrumDocument) -> HumdrumDocument:
             capture_output=True,
             timeout=30,
             check=False,
+            env=_tool_environment(executable),
         )
     except subprocess.TimeoutExpired as error:
         raise HumdrumError("Filtr addic nie zakończył pracy w ciągu 30 sekund.") from error
@@ -76,6 +87,7 @@ def run_barnum(document: HumdrumDocument) -> HumdrumDocument:
                 capture_output=True,
                 timeout=30,
                 check=False,
+                env=_tool_environment(executable),
             )
         except subprocess.TimeoutExpired as error:
             raise HumdrumError(
@@ -178,6 +190,7 @@ def _run_filter(arguments: list[str], source: str, name: str) -> str:
             capture_output=True,
             timeout=30,
             check=False,
+            env=_tool_environment(arguments[0]),
         )
     except subprocess.TimeoutExpired as error:
         raise HumdrumError(f"Filtr {name} nie zakończył pracy w ciągu 30 sekund.") from error
