@@ -1,16 +1,46 @@
 from __future__ import annotations
 
-from pathlib import Path
+import os
 import shutil
 import subprocess
+from pathlib import Path
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 
 
+def find_humdrum_tool(name: str) -> str:
+    """Find a Humdrum executable in PATH or in common installation directories."""
+    executable = shutil.which(name)
+    if executable is not None:
+        return executable
+
+    home = Path.home()
+    configured_paths = os.environ.get("SPINEWORKS_HUMDRUM_PATH", "").split(os.pathsep)
+    search_directories = [
+        *(Path(path).expanduser() for path in configured_paths if path),
+        home / "humdrum-tools" / "humlib" / "bin",
+        home / "humdrum-tools" / "humextra" / "bin",
+        home / "humdrum-tools" / "humdrum" / "bin",
+        home / "humlib" / "bin",
+        home / "humextra" / "bin",
+        home / ".local" / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/opt/local/bin"),
+        Path("/usr/local/bin"),
+    ]
+    for directory in search_directories:
+        executable = shutil.which(name, path=str(directory))
+        if executable is not None:
+            return executable
+
+    raise HumdrumError(
+        f"Nie znaleziono programu {name}. Zainstaluj narzędzia Humdrum albo dodaj "
+        "katalog z programami do PATH lub SPINEWORKS_HUMDRUM_PATH."
+    )
+
+
 def run_addic(document: HumdrumDocument) -> HumdrumDocument:
-    executable = shutil.which("addic")
-    if executable is None:
-        raise HumdrumError("Nie znaleziono programu addic w zmiennej PATH.")
+    executable = find_humdrum_tool("addic")
     source_text = document.to_text()
     Path("addic-input.krn").write_text(source_text, encoding="utf-8")
     try:
@@ -37,9 +67,7 @@ def run_addic(document: HumdrumDocument) -> HumdrumDocument:
 
 
 def run_barnum(document: HumdrumDocument) -> HumdrumDocument:
-    executable = shutil.which("barnum")
-    if executable is None:
-        raise HumdrumError("Nie znaleziono programu barnum w zmiennej PATH.")
+    executable = find_humdrum_tool("barnum")
     output = document.to_text()
     for mode in ("-r", "-a"):
         try:
@@ -65,9 +93,7 @@ def run_barnum(document: HumdrumDocument) -> HumdrumDocument:
 
 
 def remove_system_breaks(document: HumdrumDocument) -> HumdrumDocument:
-    rid = shutil.which("rid")
-    if rid is None:
-        raise HumdrumError("Nie znaleziono programu rid w zmiennej PATH.")
+    rid = find_humdrum_tool("rid")
 
     break_records = {"!!pagebreak:original", "!!linebreak:original"}
     source_lines = [
@@ -88,9 +114,7 @@ def insert_spine(
     spine_type: str,
     hidden_rests: bool = False,
 ) -> HumdrumDocument:
-    extract = shutil.which("extractx")
-    if extract is None:
-        raise HumdrumError("Nie znaleziono programu extractx w zmiennej PATH.")
+    extract = find_humdrum_tool("extractx")
     if not 0 <= reference_column < document.spine_count:
         raise HumdrumError("Wybrany spine nie istnieje.")
 
@@ -105,9 +129,7 @@ def insert_spine(
         "extractx",
     )
     if spine_type == "**kern":
-        restfill = shutil.which("restfill")
-        if restfill is None:
-            raise HumdrumError("Nie znaleziono programu restfill w zmiennej PATH.")
+        restfill = find_humdrum_tool("restfill")
         arguments = [restfill, "-yi" if hidden_rests else "-i", "blank"]
         output = _run_filter(arguments, output, "restfill")
         filtered = HumdrumDocument.from_text(output)
@@ -127,9 +149,7 @@ def insert_spine(
 
 
 def remove_spine(document: HumdrumDocument, *, column: int) -> HumdrumDocument:
-    extract = shutil.which("extractx")
-    if extract is None:
-        raise HumdrumError("Nie znaleziono programu extractx w zmiennej PATH.")
+    extract = find_humdrum_tool("extractx")
     if document.spine_count <= 1:
         raise HumdrumError("Nie można usunąć ostatniego spine’u.")
     if not 0 <= column < document.spine_count:
