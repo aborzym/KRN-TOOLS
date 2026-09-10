@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -139,58 +141,71 @@ class MainWindow(QMainWindow):
         decoration_layout.addStretch(1)
         layout.addWidget(decoration_row)
 
-        self.propagate_button = QPushButton("Uzupełnij i popraw przypisania spine’ów")
-        self.propagate_button.setObjectName("primaryButton")
-        self.propagate_button.setEnabled(False)
-        self.propagate_button.clicked.connect(self.propagate_assignments)
-        layout.addWidget(self.propagate_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        operations = QGridLayout()
+        operations.setHorizontalSpacing(8)
+        operations.setVerticalSpacing(8)
+        for column in range(5):
+            operations.setColumnStretch(column, 1)
 
-        filter_buttons = QHBoxLayout()
-        filter_buttons.setSpacing(8)
-
-        self.addic_button = QPushButton("addic")
+        self.addic_button = QPushButton("Generuj kody IC")
         self.addic_button.setObjectName("primaryButton")
         self.addic_button.setEnabled(False)
         self.addic_button.clicked.connect(self.apply_addic)
-        filter_buttons.addWidget(self.addic_button)
 
-        self.ig_button = QPushButton("IG")
+        self.ig_button = QPushButton("Dodaj linię IG")
         self.ig_button.setObjectName("primaryButton")
         self.ig_button.setEnabled(False)
         self.ig_button.clicked.connect(self.toggle_instrument_group_row)
-        filter_buttons.addWidget(self.ig_button)
 
-        self.barnum_button = QPushButton("barnum")
+        self.barnum_button = QPushButton("Ponumeruj takty")
         self.barnum_button.setObjectName("primaryButton")
         self.barnum_button.setEnabled(False)
         self.barnum_button.clicked.connect(self.apply_barnum)
-        filter_buttons.addWidget(self.barnum_button)
-
-        self.breaks_button = QPushButton("Usuń łamania systemów")
-        self.breaks_button.setObjectName("dangerButton")
-        self.breaks_button.setEnabled(False)
-        self.breaks_button.clicked.connect(self.remove_system_break_records)
-        filter_buttons.addWidget(self.breaks_button)
 
         self.empty_spine_button = QPushButton("Dodaj pusty spine")
         self.empty_spine_button.setObjectName("primaryButton")
         self.empty_spine_button.setEnabled(False)
         self.empty_spine_button.clicked.connect(self.add_empty_spine)
-        filter_buttons.addWidget(self.empty_spine_button)
 
         self.kern_spine_button = QPushButton("Dodaj spine **kern")
         self.kern_spine_button.setObjectName("primaryButton")
         self.kern_spine_button.setEnabled(False)
         self.kern_spine_button.clicked.connect(self.add_kern_spine)
-        filter_buttons.addWidget(self.kern_spine_button)
+
+        self.breaks_button = QPushButton("Usuń łamania")
+        self.breaks_button.setObjectName("dangerButton")
+        self.breaks_button.setEnabled(False)
+        self.breaks_button.clicked.connect(self.remove_system_break_records)
 
         self.remove_spine_button = QPushButton("Usuń spine")
         self.remove_spine_button.setObjectName("dangerButton")
         self.remove_spine_button.setEnabled(False)
         self.remove_spine_button.clicked.connect(self.remove_selected_spine)
-        filter_buttons.addWidget(self.remove_spine_button)
-        filter_buttons.addStretch(1)
-        layout.addLayout(filter_buttons)
+
+        primary_operations = [
+            self.addic_button,
+            self.ig_button,
+            self.barnum_button,
+            self.empty_spine_button,
+            self.kern_spine_button,
+        ]
+        for column, button in enumerate(primary_operations):
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            operations.addWidget(button, 0, column)
+
+        for column, button in enumerate((self.breaks_button, self.remove_spine_button)):
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            operations.addWidget(button, 1, column)
+
+        self.propagate_button = QPushButton("Uzupełnij i popraw przypisania spine’ów")
+        self.propagate_button.setObjectName("primaryButton")
+        self.propagate_button.setEnabled(False)
+        self.propagate_button.clicked.connect(self.propagate_assignments)
+        self.propagate_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        operations.addWidget(self.propagate_button, 2, 0, 1, 5)
+        layout.addLayout(operations)
 
         self.setCentralWidget(central)
         version_label = QLabel(f"© 2026 Andrzej Borzym · SPINEWORKS {__version__}")
@@ -710,7 +725,7 @@ class MainWindow(QMainWindow):
 
     def _sync_ig_button(self) -> None:
         removing = self.show_group_row
-        self.ig_button.setText("Usuń IG" if removing else "IG")
+        self.ig_button.setText("Usuń linię IG" if removing else "Dodaj linię IG")
         self.ig_button.setObjectName("dangerButton" if removing else "primaryButton")
         self.ig_button.style().unpolish(self.ig_button)
         self.ig_button.style().polish(self.ig_button)
@@ -940,6 +955,9 @@ class MainWindow(QMainWindow):
             }
             QPushButton#dangerButton:hover { background: #914047; }
             QPushButton#dangerButton:pressed { background: #64272b; }
+            QPushButton#dangerButton:disabled {
+                background: #26342b; color: #718078; border-color: #35443a;
+            }
             QWidget#instrumentEditorActive { background: #183d29; }
             QWidget#instrumentEditorKernInactive { background: transparent; }
             QLabel#fixedPrefix { background: transparent; color: #63d297; font-weight: 700; }
