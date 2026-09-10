@@ -120,6 +120,7 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setSectionsClickable(True)
         self.table.verticalHeader().sectionClicked.connect(self.toggle_row_editing)
@@ -776,6 +777,7 @@ class MainWindow(QMainWindow):
         self.table.setColumnCount(self.document.spine_count)
         for column, spine_type in enumerate(self.document.spine_types):
             header_item = QTableWidgetItem(str(column + 1))
+            header_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             header_item.setToolTip(spine_type)
             header_item.setForeground(QColor("#eef7f1"))
             if spine_type == "**kern":
@@ -832,6 +834,10 @@ class MainWindow(QMainWindow):
                     )
                     field.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not active)
                     field.textChanged.connect(self._mark_field_edited)
+                    field.textChanged.connect(
+                        lambda text, column=column, fixed_prefix=fixed_prefix:
+                        self._ensure_column_text_width(column, fixed_prefix + text)
+                    )
                     editor_layout.addWidget(prefix)
                     editor_layout.addWidget(field, 1)
                     self.row_inputs.setdefault(kind, {})[column] = field
@@ -855,7 +861,15 @@ class MainWindow(QMainWindow):
         for current, following in zip(editable_fields, editable_fields[1:], strict=False):
             QWidget.setTabOrder(current, following)
         self.table.resizeRowsToContents()
+        self.table.resizeColumnsToContents()
+        for column in range(self.table.columnCount()):
+            self.table.setColumnWidth(column, max(140, self.table.columnWidth(column)))
         self._update_window_title()
+
+    def _ensure_column_text_width(self, column: int, text: str) -> None:
+        required = self.table.fontMetrics().horizontalAdvance(text) + 34
+        if required > self.table.columnWidth(column):
+            self.table.setColumnWidth(column, required)
 
     def _mark_field_edited(self) -> None:
         self.field_edits_dirty = True
