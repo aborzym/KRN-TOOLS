@@ -7,7 +7,7 @@ przepisywania wielokolumnowych rekordów interpretacji. Zmiany powstają najpier
 w dokumencie roboczym, można je cofnąć, a plik na dysku jest modyfikowany dopiero
 po wybraniu polecenia **Zapisz**.
 
-## Funkcje wersji 1.0.0
+## Funkcje wersji 1.0.1
 
 - otwieranie plików `.krn` z okna programu albo metodą „przeciągnij i upuść”;
 - podgląd bloku interpretacji w układzie odpowiadającym spine'om dokumentu;
@@ -73,9 +73,9 @@ pytest
 
 ## Pakiety instalacyjne
 
-Wydanie 1.0.0 jest przygotowywane dla następujących platform:
+Wydanie 1.0.1 jest przygotowywane dla następujących platform:
 
-- Linux `x86_64` — `SPINEWORKS-1.0.0-linux-x86_64.deb`;
-- macOS Apple Silicon `arm64` — `SPINEWORKS-1.0.0-macos-arm64.dmg`.
+- Linux `x86_64` — `SPINEWORKS-1.0.1-linux-x86_64.deb`;
+- macOS Apple Silicon `arm64` — `SPINEWORKS-1.0.1-macos-arm64.dmg`.
 
 Wersja dla macOS Intel `x86_64` zostanie dodana oddzielnie.
