@@ -118,6 +118,7 @@ class MainWindow(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setSectionsClickable(True)
@@ -812,6 +813,10 @@ class MainWindow(QMainWindow):
                         if kind in self.enabled_edit_rows
                         else "instrumentEditorKernInactive"
                     )
+                    editor.setAttribute(
+                        Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+                        kind not in self.enabled_edit_rows,
+                    )
                     editor_layout = QHBoxLayout(editor)
                     editor_layout.setContentsMargins(7, 2, 5, 2)
                     editor_layout.setSpacing(1)
@@ -833,7 +838,11 @@ class MainWindow(QMainWindow):
                     self.table.setCellWidget(row, column, editor)
                     continue
                 item = QTableWidgetItem(value)
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                item.setFlags(
+                    item.flags()
+                    & ~Qt.ItemFlag.ItemIsEditable
+                    & ~Qt.ItemFlag.ItemIsSelectable
+                )
                 if self.document.spine_types[column] == "**kern":
                     item.setBackground(QColor("#18271e"))
                 self.table.setItem(row, column, item)
