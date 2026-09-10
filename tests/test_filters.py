@@ -37,6 +37,20 @@ def test_finds_tool_in_humdrum_tools_directory(
     assert find_humdrum_tool("extractx") == str(executable)
 
 
+def test_finds_tool_in_software_humdrum_tools_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = (
+        tmp_path / "software" / "humdrum-tools" / "humextra" / "bin" / "barnum"
+    )
+    make_executable(executable)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.delenv("SPINEWORKS_HUMDRUM_PATH", raising=False)
+
+    assert find_humdrum_tool("barnum") == str(executable)
+
+
 def test_finds_tool_in_configured_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
