@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from spineworks import filters
 from spineworks.filters import find_humdrum_tool
-from spineworks.humdrum import HumdrumError
+from spineworks.humdrum import HumdrumDocument, HumdrumError
 
 
 def make_executable(path: Path) -> None:
@@ -55,3 +57,23 @@ def test_reports_missing_tool(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
     with pytest.raises(HumdrumError, match="Nie znaleziono programu addic"):
         find_humdrum_tool("addic")
+
+
+def test_addic_does_not_write_diagnostic_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = "**kern\n*Ivioln\n*-\n"
+    output = "**kern\n*ICstr\n*Ivioln\n*-\n"
+    monkeypatch.setattr(filters, "find_humdrum_tool", lambda name: "/bin/addic")
+    monkeypatch.setattr(
+        filters.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=output, stderr=""),
+    )
+
+    def reject_write(*args, **kwargs):
+        raise AssertionError("run_addic nie powinien zapisywać plików diagnostycznych")
+
+    monkeypatch.setattr(Path, "write_text", reject_write)
+
+    filtered = filters.run_addic(HumdrumDocument.from_text(source))
+
+    assert filtered.instrument_classes() == ["*ICstr"]

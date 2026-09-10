@@ -42,7 +42,6 @@ def find_humdrum_tool(name: str) -> str:
 def run_addic(document: HumdrumDocument) -> HumdrumDocument:
     executable = find_humdrum_tool("addic")
     source_text = document.to_text()
-    Path("addic-input.krn").write_text(source_text, encoding="utf-8")
     try:
         result = subprocess.run(
             [executable, "-f"],
@@ -59,7 +58,6 @@ def run_addic(document: HumdrumDocument) -> HumdrumDocument:
         raise HumdrumError(f"Filtr addic zakończył się błędem:\n{message}")
     if not result.stdout.strip():
         raise HumdrumError("Filtr addic nie zwrócił danych.")
-    Path("addic-output.krn").write_text(result.stdout, encoding="utf-8")
     filtered = HumdrumDocument.from_text(result.stdout)
     if filtered.header.instrument_class_line is None:
         raise HumdrumError("Filtr addic nie utworzył wiersza *IC…")
