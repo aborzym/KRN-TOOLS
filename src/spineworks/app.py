@@ -3,8 +3,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QTimer, Qt
-from PySide6.QtGui import QAction, QColor, QCloseEvent, QKeySequence
+from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -15,8 +15,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGridLayout,
-    QHeaderView,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -1022,6 +1022,8 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    icon_path = Path(__file__).with_name("assets") / "spineworks.png"
+    app.setWindowIcon(QIcon(str(icon_path)))
     app.setStyle("Fusion")
     window = MainWindow()
     window.show()

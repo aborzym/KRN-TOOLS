@@ -71,6 +71,24 @@ Testy:
 pytest
 ```
 
+## Budowanie aplikacji
+
+PyInstaller korzysta z dołączonego pliku `SPINEWORKS.spec`, który pakuje ikonę
+okna razem z aplikacją.
+
+Na macOS najpierw należy utworzyć plik ICNS, a następnie zbudować aplikację:
+
+```bash
+./packaging/build-macos-icon.sh
+pyinstaller --noconfirm --clean SPINEWORKS.spec
+```
+
+Na Linuksie wystarczy:
+
+```bash
+pyinstaller --noconfirm --clean SPINEWORKS.spec
+```
+
 ## Pakiety instalacyjne
 
 Wydanie 1.0.1 jest przygotowywane dla następujących platform:

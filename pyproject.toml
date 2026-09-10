@@ -19,6 +19,9 @@ spineworks = "spineworks.app:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+spineworks = ["assets/*.png"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 
