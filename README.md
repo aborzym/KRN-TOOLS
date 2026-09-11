@@ -15,6 +15,9 @@ po wybraniu polecenia **Zapisz**.
 - edycja rekordu `!!!system-decoration:`;
 - oznaczanie kursywy w spine’ach `**text` i `**mod-text` na podstawie
   znaczników `/…/`, z obsługą `*ij` i `*Xij`;
+- przenoszenie oznaczeń custosów z komentarzy lokalnych spine’ów `**kern`
+  do rekordów interpretacji `*custos:dźwięk`, umieszczanych przed komentarzami,
+  kreską taktową albo następną nutą;
 - dodawanie i poprawianie rekordu `!!!!SEGMENT:` z pełną nazwą pliku;
 - generowanie kodów `*IC` za pomocą `addic`;
 - dodawanie i usuwanie linii `*IG`;

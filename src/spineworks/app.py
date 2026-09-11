@@ -1,7 +1,7 @@
-from __future__ import annotations
-
 import sys
+from itertools import pairwise
 from pathlib import Path
+from typing import ClassVar
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QKeySequence
@@ -44,7 +44,7 @@ from spineworks.humdrum import HumdrumDocument, HumdrumError
 
 
 class MainWindow(QMainWindow):
-    ROW_NAMES = {
+    ROW_NAMES: ClassVar[dict[str, str]] = {
         "exclusive_line": "Typ spine’u",
         "part_line": "Part",
         "staff_line": "Staff",
@@ -53,7 +53,7 @@ class MainWindow(QMainWindow):
         "instrument_class_line": "Klasa instrumentu",
         "instrument_group_line": "Grupa instrumentu",
     }
-    EDITABLE_ROWS = {
+    EDITABLE_ROWS: ClassVar[dict[str, str]] = {
         "instrument_name_line": '*I"',
         "instrument_abbr_line": "*I'",
         "instrument_code_line": "*",
@@ -185,6 +185,11 @@ class MainWindow(QMainWindow):
         self.italics_button.setEnabled(False)
         self.italics_button.clicked.connect(self.apply_text_italics)
 
+        self.custos_button = QPushButton("Popraw custosy")
+        self.custos_button.setObjectName("primaryButton")
+        self.custos_button.setEnabled(False)
+        self.custos_button.clicked.connect(self.apply_custos)
+
         self.breaks_button = QPushButton("Usuń łamania")
         self.breaks_button.setObjectName("dangerButton")
         self.breaks_button.setEnabled(False)
@@ -211,6 +216,12 @@ class MainWindow(QMainWindow):
 
         self.italics_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         operations.addWidget(self.italics_button, 1, 1)
+
+        self.custos_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        operations.addWidget(self.custos_button, 1, 2)
 
         for column, button in enumerate((self.breaks_button, self.remove_spine_button)):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -270,6 +281,7 @@ class MainWindow(QMainWindow):
         self.kern_spine_button.setEnabled(True)
         self.segment_button.setEnabled(True)
         self.italics_button.setEnabled(True)
+        self.custos_button.setEnabled(True)
         self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
@@ -456,6 +468,28 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Oznaczono kursywę w tekście")
         else:
             self.statusBar().showMessage("Nie znaleziono znaczników kursywy w tekście")
+
+    def apply_custos(self) -> None:
+        if self.document is None:
+            return
+
+        before = self.document.to_text()
+        try:
+            changed = self.document.correct_custos()
+        except HumdrumError as error:
+            self._show_copyable_error(
+                "Nie można poprawić custosów",
+                str(error),
+            )
+            return
+
+        if changed:
+            self.undo_texts.append(before)
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self.statusBar().showMessage("Poprawiono custosy")
+        else:
+            self.statusBar().showMessage("Nie znaleziono custosów do poprawienia")
 
     def undo(self) -> None:
         if self.field_edits_dirty:
@@ -936,7 +970,7 @@ class MainWindow(QMainWindow):
             if kind in self.enabled_edit_rows
             for field in fields.values()
         ]
-        for current, following in zip(editable_fields, editable_fields[1:], strict=False):
+        for current, following in pairwise(editable_fields):
             QWidget.setTabOrder(current, following)
         self.table.resizeRowsToContents()
         self.table.resizeColumnsToContents()
