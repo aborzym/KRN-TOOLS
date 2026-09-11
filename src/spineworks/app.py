@@ -174,6 +174,11 @@ class MainWindow(QMainWindow):
         self.kern_spine_button.setEnabled(False)
         self.kern_spine_button.clicked.connect(self.add_kern_spine)
 
+        self.segment_button = QPushButton("Segment")
+        self.segment_button.setObjectName("primaryButton")
+        self.segment_button.setEnabled(False)
+        self.segment_button.clicked.connect(self.apply_segment)
+
         self.breaks_button = QPushButton("Usuń łamania")
         self.breaks_button.setObjectName("dangerButton")
         self.breaks_button.setEnabled(False)
@@ -195,9 +200,14 @@ class MainWindow(QMainWindow):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             operations.addWidget(button, 0, column)
 
+        self.segment_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        operations.addWidget(self.segment_button, 1, 0)
+
         for column, button in enumerate((self.breaks_button, self.remove_spine_button)):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            operations.addWidget(button, 1, column)
+            operations.addWidget(button, 2, column)
 
         self.propagate_button = QPushButton("Uzupełnij i popraw przypisania spine’ów")
         self.propagate_button.setObjectName("primaryButton")
@@ -206,7 +216,7 @@ class MainWindow(QMainWindow):
         self.propagate_button.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
-        operations.addWidget(self.propagate_button, 2, 0, 1, 5)
+        operations.addWidget(self.propagate_button, 3, 0, 1, 5)
         layout.addLayout(operations)
 
         self.setCentralWidget(central)
@@ -253,6 +263,7 @@ class MainWindow(QMainWindow):
         self.breaks_button.setEnabled(True)
         self.empty_spine_button.setEnabled(True)
         self.kern_spine_button.setEnabled(True)
+        self.segment_button.setEnabled(True)
         self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
@@ -375,6 +386,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Uzupełniono i poprawiono przypisania part i staff")
         else:
             self.statusBar().showMessage("Przypisania part i staff są już prawidłowe")
+
+    def apply_segment(self) -> None:
+        if self.document is None or self.current_path is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        before = self.document.to_text()
+        changed = self.document.set_segment(self.current_path.name)
+        if changed:
+            self.undo_texts.append(before)
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self.statusBar().showMessage("Uzupełniono rekord !!!!SEGMENT:")
+        else:
+            self.statusBar().showMessage("Rekord !!!!SEGMENT: jest już prawidłowy")
 
     def undo(self) -> None:
         if self.field_edits_dirty:
