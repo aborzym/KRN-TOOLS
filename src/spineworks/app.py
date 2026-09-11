@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QRadioButton,
     QSizePolicy,
@@ -179,6 +180,11 @@ class MainWindow(QMainWindow):
         self.segment_button.setEnabled(False)
         self.segment_button.clicked.connect(self.apply_segment)
 
+        self.italics_button = QPushButton("Oznacz kursywę")
+        self.italics_button.setObjectName("primaryButton")
+        self.italics_button.setEnabled(False)
+        self.italics_button.clicked.connect(self.apply_text_italics)
+
         self.breaks_button = QPushButton("Usuń łamania")
         self.breaks_button.setObjectName("dangerButton")
         self.breaks_button.setEnabled(False)
@@ -200,10 +206,11 @@ class MainWindow(QMainWindow):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             operations.addWidget(button, 0, column)
 
-        self.segment_button.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self.segment_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         operations.addWidget(self.segment_button, 1, 0)
+
+        self.italics_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        operations.addWidget(self.italics_button, 1, 1)
 
         for column, button in enumerate((self.breaks_button, self.remove_spine_button)):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -213,9 +220,7 @@ class MainWindow(QMainWindow):
         self.propagate_button.setObjectName("primaryButton")
         self.propagate_button.setEnabled(False)
         self.propagate_button.clicked.connect(self.propagate_assignments)
-        self.propagate_button.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self.propagate_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         operations.addWidget(self.propagate_button, 3, 0, 1, 5)
         layout.addLayout(operations)
 
@@ -264,6 +269,7 @@ class MainWindow(QMainWindow):
         self.empty_spine_button.setEnabled(True)
         self.kern_spine_button.setEnabled(True)
         self.segment_button.setEnabled(True)
+        self.italics_button.setEnabled(True)
         self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
@@ -340,7 +346,7 @@ class MainWindow(QMainWindow):
             return self.save_file()
         return box.clickedButton() is discard_button
 
-    def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+    def closeEvent(self, event: QCloseEvent) -> None:
         if self._confirm_unsaved_changes():
             event.accept()
         else:
@@ -359,10 +365,7 @@ class MainWindow(QMainWindow):
                 zip(self.document.spine_types, classes, strict=True)
             )
             if spine_type == "**kern"
-            and (
-                not instrument_class.startswith("*IC")
-                or instrument_class == "*ICUNKNOWN"
-            )
+            and (not instrument_class.startswith("*IC") or instrument_class == "*ICUNKNOWN")
         ]
         if missing:
             QMessageBox.warning(
@@ -403,6 +406,57 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Rekord !!!!SEGMENT: jest już prawidłowy")
 
+    def _show_copyable_error(self, title: str, message: str) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+
+        layout = QVBoxLayout(dialog)
+        description = QLabel(
+            "Dokument zawiera błędy wymagające ręcznej korekty:",
+            dialog,
+        )
+        layout.addWidget(description)
+
+        text_box = QPlainTextEdit(dialog)
+        text_box.setPlainText(message)
+        text_box.setReadOnly(True)
+        text_box.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(text_box)
+
+        buttons = QDialogButtonBox(dialog)
+        copy_button = buttons.addButton("Kopiuj", QDialogButtonBox.ButtonRole.ActionRole)
+        ok_button = buttons.addButton("OK", QDialogButtonBox.ButtonRole.AcceptRole)
+        copy_button.clicked.connect(lambda: QApplication.clipboard().setText(message))
+        ok_button.clicked.connect(dialog.accept)
+        layout.addWidget(buttons)
+
+        dialog.resize(760, 320)
+        dialog.exec()
+
+    def apply_text_italics(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        before = self.document.to_text()
+        try:
+            changed = self.document.mark_text_italics()
+        except HumdrumError as error:
+            self._show_copyable_error(
+                "Nie można oznaczyć kursywy",
+                str(error),
+            )
+            return
+
+        if changed:
+            self.undo_texts.append(before)
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self.statusBar().showMessage("Oznaczono kursywę w tekście")
+        else:
+            self.statusBar().showMessage("Nie znaleziono znaczników kursywy w tekście")
+
     def undo(self) -> None:
         if self.field_edits_dirty:
             self.field_edits_dirty = False
@@ -433,15 +487,16 @@ class MainWindow(QMainWindow):
                     self._row_values("instrument_abbr_line")
                 )
             if "instrument_code_line" in self.enabled_edit_rows:
-                codes = [f"*{value}" if value else "*" for value in self._row_values("instrument_code_line")]
+                codes = [
+                    f"*{value}" if value else "*"
+                    for value in self._row_values("instrument_code_line")
+                ]
                 changed |= self.document.set_instrument_codes(codes)
             if "instrument_group_line" in self.enabled_edit_rows:
                 changed |= self.document.set_instrument_groups(
                     self._row_values("instrument_group_line")
                 )
-            changed |= self.document.set_system_decoration(
-                self.system_decoration_input.text()
-            )
+            changed |= self.document.set_system_decoration(self.system_decoration_input.text())
         except HumdrumError as error:
             QMessageBox.warning(self, "Nie można zastosować danych", str(error))
             return False
@@ -477,9 +532,7 @@ class MainWindow(QMainWindow):
             box = QMessageBox(self)
             box.setWindowTitle("Brak kodów instrumentów")
             box.setIcon(QMessageBox.Icon.Warning)
-            box.setText(
-                "Brak kodów instrumentów w spine’ach: " + ", ".join(missing) + "."
-            )
+            box.setText("Brak kodów instrumentów w spine’ach: " + ", ".join(missing) + ".")
             box.setInformativeText("Czy mimo to uruchomić filtr addic?")
             proceed = box.addButton("Kontynuuj", QMessageBox.ButtonRole.AcceptRole)
             box.addButton("Wróć do edycji", QMessageBox.ButtonRole.RejectRole)
@@ -617,9 +670,7 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self.statusBar().showMessage(f"Dodano spine {spine_type}")
 
-    def _ask_spine_insertion(
-        self, *, kern: bool
-    ) -> tuple[int, bool, str, bool] | None:
+    def _ask_spine_insertion(self, *, kern: bool) -> tuple[int, bool, str, bool] | None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Dodaj spine **kern" if kern else "Dodaj pusty spine")
         dialog.setMinimumWidth(520)
@@ -789,6 +840,7 @@ class MainWindow(QMainWindow):
                     "*",
                 )
             )
+
         def row_order(row):
             label, line_number, _, _ = row
             if label == "Grupa instrumentu" and line_number == -2:
@@ -862,8 +914,9 @@ class MainWindow(QMainWindow):
                     field.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, not active)
                     field.textChanged.connect(self._mark_field_edited)
                     field.textChanged.connect(
-                        lambda text, column=column, fixed_prefix=fixed_prefix:
-                        self._ensure_column_text_width(column, fixed_prefix + text)
+                        lambda text, column=column, fixed_prefix=fixed_prefix: (
+                            self._ensure_column_text_width(column, fixed_prefix + text)
+                        )
                     )
                     editor_layout.addWidget(prefix)
                     editor_layout.addWidget(field, 1)
@@ -872,9 +925,7 @@ class MainWindow(QMainWindow):
                     continue
                 item = QTableWidgetItem(value)
                 item.setFlags(
-                    item.flags()
-                    & ~Qt.ItemFlag.ItemIsEditable
-                    & ~Qt.ItemFlag.ItemIsSelectable
+                    item.flags() & ~Qt.ItemFlag.ItemIsEditable & ~Qt.ItemFlag.ItemIsSelectable
                 )
                 if self.document.spine_types[column] == "**kern":
                     item.setBackground(QColor("#18271e"))
@@ -930,7 +981,7 @@ class MainWindow(QMainWindow):
         suffix = f" - {description}" if description else ""
         self.setWindowTitle(f"{prefix}SPINEWORKS{suffix}")
 
-    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+    def eventFilter(self, watched, event) -> bool:
         editable_fields = [
             field
             for kind, fields in self.row_inputs.items()
@@ -973,12 +1024,12 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, watched.selectAll)
         return super().eventFilter(watched, event)
 
-    def dragEnterEvent(self, event) -> None:  # noqa: N802
+    def dragEnterEvent(self, event) -> None:
         urls = event.mimeData().urls()
         if len(urls) == 1 and urls[0].toLocalFile().lower().endswith(".krn"):
             event.acceptProposedAction()
 
-    def dropEvent(self, event) -> None:  # noqa: N802
+    def dropEvent(self, event) -> None:
         previous_path = self.current_path
         self.load_path(Path(event.mimeData().urls()[0].toLocalFile()))
         if self.current_path != previous_path:

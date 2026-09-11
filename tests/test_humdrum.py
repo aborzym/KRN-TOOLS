@@ -4,7 +4,6 @@ import pytest
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 
-
 EXCLUSIVE = "**kern\t**fba\t**dynam\t**kern\t**text"
 
 
@@ -59,9 +58,7 @@ def test_adds_normalized_instrument_code_row_after_abbreviations() -> None:
 
     assert document.set_instrument_codes(["org", "ignored", "*", "Ivioln", "ignored"])
     assert document.instrument_codes() == ["*Iorg", "*", "*", "*Ivioln", "*"]
-    assert document.lines[document.header.instrument_abbr_line + 1] == (
-        "*Iorg\t*\t*\t*Ivioln\t*"
-    )
+    assert document.lines[document.header.instrument_abbr_line + 1] == ("*Iorg\t*\t*\t*Ivioln\t*")
 
 
 def test_updates_existing_instrument_code_row() -> None:
@@ -137,17 +134,25 @@ def test_recalculates_parts_and_staffs_with_keyboard_pairs() -> None:
 
     assert document.propagate_kern_assignments() is True
     assert document.fields(document.header.part_line) == [
-        "*part2", "*part2", "*part2", "*part2", "*part1", "*part1"
+        "*part2",
+        "*part2",
+        "*part2",
+        "*part2",
+        "*part1",
+        "*part1",
     ]
     assert document.fields(document.header.staff_line) == [
-        "*staff4", "*staff4", "*staff3", "*staff3", "*staff2", "*staff1"
+        "*staff4",
+        "*staff4",
+        "*staff3",
+        "*staff3",
+        "*staff2",
+        "*staff1",
     ]
 
 
 def test_adds_updates_and_removes_system_decoration() -> None:
-    document = HumdrumDocument.from_text(
-        "!!!COM: Test, Composer\n**kern\n*part1\n*staff1\n*-\n"
-    )
+    document = HumdrumDocument.from_text("!!!COM: Test, Composer\n**kern\n*part1\n*staff1\n*-\n")
 
     assert document.system_decoration() == ""
     assert document.set_system_decoration("[(s1)]") is True
@@ -170,12 +175,132 @@ def test_adds_segment_as_first_line() -> None:
 
 def test_updates_moves_and_deduplicates_segment() -> None:
     document = HumdrumDocument.from_text(
-        "!!!COM: Test, Composer\n"
-        "!!!!SEGMENT: old.krn\n"
-        "!!!!SEGMENT: duplicate.krn\n"
-        "**kern\n*-\n"
+        "!!!COM: Test, Composer\n!!!!SEGMENT: old.krn\n!!!!SEGMENT: duplicate.krn\n**kern\n*-\n"
     )
 
     assert document.set_segment("new.krn") is True
     assert document.lines[0] == "!!!!SEGMENT: new.krn"
     assert sum(line.startswith("!!!!SEGMENT:") for line in document.lines) == 1
+
+
+def test_marks_text_italics_using_existing_interpretation_records() -> None:
+    document = HumdrumDocument.from_text("**text\nKy-\n*\n! komentarz\n/ri-\ne/\n*\nA-\n*-\n")
+
+    assert document.mark_text_italics() is True
+    assert document.lines == [
+        "**text",
+        "Ky-",
+        "*ij",
+        "! komentarz",
+        "ri-",
+        "e",
+        "*Xij",
+        "A-",
+        "*-",
+    ]
+
+
+def test_inserts_text_italics_around_local_comments() -> None:
+    document = HumdrumDocument.from_text(
+        "**text\nGlo-\n! pierwszy komentarz\n! drugi komentarz\n/ri-a/\nPa-\ntri\n*-\n"
+    )
+
+    assert document.mark_text_italics() is True
+    assert document.lines == [
+        "**text",
+        "Glo-",
+        "*ij",
+        "! pierwszy komentarz",
+        "! drugi komentarz",
+        "ri-a",
+        "*Xij",
+        "Pa-",
+        "tri",
+        "*-",
+    ]
+
+
+def test_joins_adjacent_text_italic_ranges() -> None:
+    document = HumdrumDocument.from_text("**text\n/Do\nmi\nne/\n/De-\nus/\nA-\nmen\n*-\n")
+
+    assert document.mark_text_italics() is True
+    assert document.lines == [
+        "**text",
+        "*ij",
+        "Do",
+        "mi",
+        "ne",
+        "De-",
+        "us",
+        "*Xij",
+        "A-",
+        "men",
+        "*-",
+    ]
+
+
+def test_reports_all_text_italic_errors_with_staff_context() -> None:
+    source = (
+        "**kern\t**text\t**kern\t**text\n"
+        "*staff2\t*staff2\t*staff1\t*staff1\n"
+        '*I"Violino\t*\t*I"Violoncello\t*\n'
+        "*I'vl\t*\t*\t*\n"
+        "4c\t/Ky-\t4C\t-e/\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    with pytest.raises(HumdrumError) as caught:
+        document.mark_text_italics()
+
+    assert str(caught.value).splitlines() == [
+        "Brak zamknięcia kursywy — staff 2 (vl), linia 5: /Ky-",
+        "Brak otwarcia kursywy — staff 1 (Violoncello), linia 5: -e/",
+    ]
+    assert document.to_text() == source
+
+
+def test_reports_text_italic_spine_split_as_an_error() -> None:
+    source = (
+        "**kern\t**text\n*staff1\t*staff1\n*I\"Voce\t*\n*I'V\t*\n4c\t/Ky-\n*\t*^\n4d\te/\n*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    with pytest.raises(HumdrumError) as caught:
+        document.mark_text_italics()
+
+    assert str(caught.value) == ("Błędne rozdwojenie spine’u **text — staff 1 (V), linia 6: *^")
+    assert document.to_text() == source
+
+
+def test_combines_text_italic_markers_in_shared_records() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**text\t**mod-text\n"
+        "*staff1\t*staff1\t*staff1\n"
+        '*I"Voce\t*\t*\n'
+        "*I'V\t*\t*\n"
+        "4c\t/Ky-\t/Glo-\n"
+        "4d\te/\tria/\n"
+        "*-\t*-\t*-\n"
+    )
+
+    assert document.mark_text_italics() is True
+    assert document.lines == [
+        "**kern\t**text\t**mod-text",
+        "*staff1\t*staff1\t*staff1",
+        '*I"Voce\t*\t*',
+        "*I'V\t*\t*",
+        "*\t*ij\t*ij",
+        "4c\tKy-\tGlo-",
+        "4d\te\tria",
+        "*\t*Xij\t*Xij",
+        "*-\t*-\t*-",
+    ]
+
+
+def test_leaves_text_without_italic_markers_unchanged() -> None:
+    source = "**text\nKy-\nri-\ne\n*-\n"
+    document = HumdrumDocument.from_text(source)
+
+    assert document.mark_text_italics() is False
+    assert document.to_text() == source

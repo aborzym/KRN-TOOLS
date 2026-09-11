@@ -7,12 +7,14 @@ przepisywania wielokolumnowych rekordów interpretacji. Zmiany powstają najpier
 w dokumencie roboczym, można je cofnąć, a plik na dysku jest modyfikowany dopiero
 po wybraniu polecenia **Zapisz**.
 
-## Funkcje wersji 1.0.1
+## Funkcje
 
 - otwieranie plików `.krn` z okna programu albo metodą „przeciągnij i upuść”;
 - podgląd bloku interpretacji w układzie odpowiadającym spine'om dokumentu;
 - edycja nazw pełnych, nazw skróconych, kodów instrumentów i grup instrumentów;
 - edycja rekordu `!!!system-decoration:`;
+- oznaczanie kursywy w spine’ach `**text` i `**mod-text` na podstawie
+  znaczników `/…/`, z obsługą `*ij` i `*Xij`;
 - dodawanie i poprawianie rekordu `!!!!SEGMENT:` z pełną nazwą pliku;
 - generowanie kodów `*IC` za pomocą `addic`;
 - dodawanie i usuwanie linii `*IG`;

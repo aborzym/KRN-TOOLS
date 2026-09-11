@@ -82,8 +82,7 @@ class HumdrumDocument:
         ]
 
         staff_numbers = {
-            column: number
-            for number, column in enumerate(reversed(kern_columns), start=1)
+            column: number for number, column in enumerate(reversed(kern_columns), start=1)
         }
         part_numbers: dict[int, int] = {}
         current_part = 0
@@ -93,9 +92,7 @@ class HumdrumDocument:
             if right_kern is not None:
                 between = spine_types[column + 1 : right_kern]
                 same_name = names[column] != "*" and names[column] == names[right_kern]
-                keyboard_class = (
-                    classes[column] == "*ICklav" and classes[right_kern] == "*ICklav"
-                )
+                keyboard_class = classes[column] == "*ICklav" and classes[right_kern] == "*ICklav"
                 shares_keyboard_part = (
                     all(spine_type == "**fing" for spine_type in between)
                     and same_name
@@ -263,9 +260,7 @@ class HumdrumDocument:
     def set_system_decoration(self, value: str) -> bool:
         prefix = "!!!system-decoration:"
         normalized = value.strip()
-        matches = [
-            index for index, line in enumerate(self.lines) if line.startswith(prefix)
-        ]
+        matches = [index for index, line in enumerate(self.lines) if line.startswith(prefix)]
         if normalized:
             replacement = f"{prefix} {normalized}"
             if len(matches) == 1 and self.lines[matches[0]] == replacement:
@@ -287,15 +282,217 @@ class HumdrumDocument:
     def set_segment(self, filename: str) -> bool:
         prefix = "!!!!SEGMENT:"
         replacement = f"{prefix} {filename}"
-        matches = [
-            index for index, line in enumerate(self.lines) if line.startswith(prefix)
-        ]
+        matches = [index for index, line in enumerate(self.lines) if line.startswith(prefix)]
         if matches == [0] and self.lines[0] == replacement:
             return False
 
         for index in reversed(matches):
             del self.lines[index]
         self.lines.insert(0, replacement)
+        self.header = self._find_header()
+        return True
+
+    def _text_spine_label(self, column: int) -> str:
+        staff = "*"
+        if self.header.staff_line is not None:
+            staff = self.fields(self.header.staff_line)[column]
+
+        staff_number = staff.removeprefix("*staff") if staff.startswith("*staff") else "?"
+        kern_column = next(
+            (
+                candidate
+                for candidate, spine_type in enumerate(self.spine_types)
+                if spine_type == "**kern"
+                and self.header.staff_line is not None
+                and self.fields(self.header.staff_line)[candidate] == staff
+            ),
+            None,
+        )
+
+        instrument = "brak nazwy"
+        if kern_column is not None:
+            if self.header.instrument_abbr_line is not None:
+                abbreviation = self.fields(self.header.instrument_abbr_line)[kern_column]
+                if abbreviation != "*":
+                    instrument = abbreviation.removeprefix("*I'")
+            if instrument == "brak nazwy" and self.header.instrument_name_line is not None:
+                name = self.fields(self.header.instrument_name_line)[kern_column]
+                if name != "*":
+                    instrument = name.removeprefix('*I"')
+
+        return f"staff {staff_number} ({instrument})"
+
+    def mark_text_italics(self) -> bool:
+        text_columns = [
+            column
+            for column, spine_type in enumerate(self.spine_types)
+            if spine_type in {"**text", "**mod-text"}
+        ]
+        updates: dict[int, list[str]] = {}
+        insertions: dict[int, list[str]] = {}
+        errors: list[str] = []
+
+        for column in text_columns:
+            split_found = False
+            for line_number in range(self.header.exclusive_line + 1, len(self.lines)):
+                line = self.lines[line_number]
+                if not line.startswith("*") or line.startswith("**"):
+                    continue
+
+                fields = line.split("\t")
+                if len(fields) != self.spine_count:
+                    continue
+
+                token = fields[column]
+                if token in {"*^", "*v", "*x", "*+"}:
+                    errors.append(
+                        "Błędne rozdwojenie spine’u "
+                        f"{self.spine_types[column]} — "
+                        f"{self._text_spine_label(column)}, "
+                        f"linia {line_number + 1}: {token}"
+                    )
+                    split_found = True
+
+            if split_found:
+                continue
+            syllable_lines: list[int] = []
+            tokens: list[str] = []
+
+            for line_number in range(self.header.exclusive_line + 1, len(self.lines)):
+                line = self.lines[line_number]
+                if line.startswith(("!", "*", "=")):
+                    continue
+
+                fields = line.split("\t")
+                if len(fields) != self.spine_count:
+                    continue
+
+                token = fields[column]
+                if token and token != ".":
+                    syllable_lines.append(line_number)
+                    tokens.append(token)
+
+            starts = [token.startswith("/") for token in tokens]
+            ends = [token.endswith("/") for token in tokens]
+            consumed_starts: set[int] = set()
+            ranges: list[tuple[int, int]] = []
+            active_start: int | None = None
+
+            for position, line_number in enumerate(syllable_lines):
+                if starts[position] and position not in consumed_starts:
+                    if active_start is not None:
+                        errors.append(
+                            "Brak zamknięcia kursywy — "
+                            f"{self._text_spine_label(column)}, "
+                            f"linia {active_start + 1}: "
+                            f"{self.fields(active_start)[column]}"
+                        )
+                    active_start = line_number
+
+                if ends[position]:
+                    if active_start is None:
+                        errors.append(
+                            "Brak otwarcia kursywy — "
+                            f"{self._text_spine_label(column)}, "
+                            f"linia {line_number + 1}: "
+                            f"{self.fields(line_number)[column]}"
+                        )
+                        continue
+
+                    next_position = position + 1
+                    if next_position < len(syllable_lines) and starts[next_position]:
+                        consumed_starts.add(next_position)
+                    else:
+                        ranges.append((active_start, line_number))
+                        active_start = None
+
+            if active_start is not None:
+                errors.append(
+                    "Brak zamknięcia kursywy — "
+                    f"{self._text_spine_label(column)}, "
+                    f"linia {active_start + 1}: "
+                    f"{self.fields(active_start)[column]}"
+                )
+
+            for position, line_number in enumerate(syllable_lines):
+                if not starts[position] and not ends[position]:
+                    continue
+
+                fields = updates.setdefault(line_number, self.fields(line_number).copy())
+                token = fields[column]
+                if starts[position]:
+                    token = token[1:]
+                if ends[position] and token.endswith("/"):
+                    token = token[:-1]
+                fields[column] = token
+
+            for start_line, end_line in ranges:
+                previous_syllables = [
+                    line_number for line_number in syllable_lines if line_number < start_line
+                ]
+                previous_line = previous_syllables[-1] if previous_syllables else None
+
+                opening_line = None
+                if previous_line is not None:
+                    opening_line = next(
+                        (
+                            line_number
+                            for line_number in range(start_line - 1, previous_line, -1)
+                            if self.lines[line_number].startswith("*")
+                            and len(self.fields(line_number)) == self.spine_count
+                            and self.fields(line_number)[column] == "*"
+                        ),
+                        None,
+                    )
+                if opening_line is None:
+                    insertion_line = start_line
+                    while (
+                        insertion_line > 0
+                        and self.lines[insertion_line - 1].startswith("!")
+                        and not self.lines[insertion_line - 1].startswith("!!")
+                    ):
+                        insertion_line -= 1
+                    opening_fields = insertions.setdefault(insertion_line, ["*"] * self.spine_count)
+                else:
+                    opening_fields = updates.setdefault(
+                        opening_line, self.fields(opening_line).copy()
+                    )
+                opening_fields[column] = "*ij"
+
+                next_syllable = next(
+                    (line_number for line_number in syllable_lines if line_number > end_line),
+                    len(self.lines),
+                )
+                closing_line = next(
+                    (
+                        line_number
+                        for line_number in range(end_line + 1, next_syllable)
+                        if self.lines[line_number].startswith("*")
+                        and len(self.fields(line_number)) == self.spine_count
+                        and self.fields(line_number)[column] == "*"
+                    ),
+                    None,
+                )
+                if closing_line is None:
+                    closing_fields = insertions.setdefault(end_line + 1, ["*"] * self.spine_count)
+                else:
+                    closing_fields = updates.setdefault(
+                        closing_line, self.fields(closing_line).copy()
+                    )
+                closing_fields[column] = "*Xij"
+
+        if errors:
+            raise HumdrumError("\n".join(errors))
+
+        if not updates and not insertions:
+            return False
+
+        for line_number, fields in updates.items():
+            self.lines[line_number] = "\t".join(fields)
+
+        for line_number, fields in sorted(insertions.items(), reverse=True):
+            self.lines.insert(line_number, "\t".join(fields))
+
         self.header = self._find_header()
         return True
 
@@ -368,6 +565,4 @@ class HumdrumDocument:
 
     def _validate_width(self, fields: list[str], label: str) -> None:
         if len(fields) != self.spine_count:
-            raise HumdrumError(
-                f"Wiersz {label} ma {len(fields)} pól zamiast {self.spine_count}."
-            )
+            raise HumdrumError(f"Wiersz {label} ma {len(fields)} pól zamiast {self.spine_count}.")
