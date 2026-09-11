@@ -304,3 +304,109 @@ def test_leaves_text_without_italic_markers_unchanged() -> None:
 
     assert document.mark_text_italics() is False
     assert document.to_text() == source
+
+
+def test_corrects_custos_comments_before_barline() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\t**kern\n"
+        "*staff3\t*staff2\t*staff1\n"
+        "!LO:SIC:custos G:v\t"
+        "!LO:SIC:custos:G:t=v\t"
+        "!LO:TX:t=P:problem&colon;custos:f#:v\n"
+        "4c\t4d\t4e\n"
+        "! pierwszy komentarz\t!\t! trzeci komentarz\n"
+        "=2\t=2\t=2\n"
+        "4d\t4e\t4f#\n"
+        "*-\t*-\t*-\n"
+    )
+
+    assert document.correct_custos() is True
+    assert document.lines == [
+        "**kern\t**kern\t**kern",
+        "*staff3\t*staff2\t*staff1",
+        "!\t!\t!",
+        "4c\t4d\t4e",
+        "*custos:G\t*custos:G\t*custos:f#",
+        "! pierwszy komentarz\t!\t! trzeci komentarz",
+        "=2\t=2\t=2",
+        "4d\t4e\t4f#",
+        "*-\t*-\t*-",
+    ]
+
+
+def test_corrects_custos_before_next_note_using_empty_interpretation() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "*staff1\n"
+        "!LO:TX:problem=custos a:v\n"
+        "4c\n"
+        "*\n"
+        "! komentarz przed następną nutą\n"
+        "4d\n"
+        "*-\n"
+    )
+
+    assert document.correct_custos() is True
+    assert document.lines == [
+        "**kern",
+        "*staff1",
+        "!",
+        "4c",
+        "*custos:a",
+        "! komentarz przed następną nutą",
+        "4d",
+        "*-",
+    ]
+
+
+def test_inserts_custos_directly_before_next_note() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n*staff1\n!LO:SIC&colon;custos:cc:t=v\n4c\n4d\n*-\n"
+    )
+
+    assert document.correct_custos() is True
+    assert document.lines == [
+        "**kern",
+        "*staff1",
+        "!",
+        "4c",
+        "*custos:cc",
+        "4d",
+        "*-",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            "!LO:SIC:custos:G:t=v\n4c\n!LO:SIC:custos:A:t=v\n4d\n*-\n",
+            "Drugi custos przed następną nutą",
+        ),
+        (
+            "!LO:SIC:custos\n4c\n4d\n*-\n",
+            "Brak dźwięku w oznaczeniu custos",
+        ),
+        (
+            "!LO:SIC:custos:G:t=v\n*-\n",
+            "Brak nuty opisanej przez custos",
+        ),
+        (
+            "!LO:SIC:custos:G:t=v\n4c\n*^\n4d\n*-\n",
+            "Błędne rozdwojenie spine’u **kern",
+        ),
+    ],
+)
+def test_reports_custos_errors_without_changing_document(
+    body: str,
+    message: str,
+) -> None:
+    source = f"**kern\n*staff1\n*I'vl\n{body}"
+    document = HumdrumDocument.from_text(source)
+    original_lines = document.lines.copy()
+
+    with pytest.raises(HumdrumError) as caught:
+        document.correct_custos()
+
+    assert message in str(caught.value)
+    assert document.lines == original_lines

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -483,6 +484,188 @@ class HumdrumDocument:
 
         if errors:
             raise HumdrumError("\n".join(errors))
+
+        if not updates and not insertions:
+            return False
+
+        for line_number, fields in updates.items():
+            self.lines[line_number] = "\t".join(fields)
+
+        for line_number, fields in sorted(insertions.items(), reverse=True):
+            self.lines.insert(line_number, "\t".join(fields))
+
+        self.header = self._find_header()
+        return True
+
+    def correct_custos(self) -> bool:
+        marker_pattern = re.compile(r"(?::|=|&colon;)custos(?:[ \t]+|:)([^ \t:]+)")
+        marker_name_pattern = re.compile(r"(?::|=|&colon;)custos(?=$|[ \t:])")
+        kern_columns = [
+            column for column, spine_type in enumerate(self.spine_types) if spine_type == "**kern"
+        ]
+        updates: dict[int, list[str]] = {}
+        insertions: dict[int, list[str]] = {}
+        errors: list[str] = []
+        markers: dict[int, list[tuple[int, str]]] = {}
+
+        for column in kern_columns:
+            column_markers: list[tuple[int, str]] = []
+
+            for line_number in range(self.header.exclusive_line + 1, len(self.lines)):
+                line = self.lines[line_number]
+                if not line.startswith("!") or line.startswith("!!"):
+                    continue
+
+                fields = line.split("\t")
+                if len(fields) != self.spine_count:
+                    continue
+
+                token = fields[column]
+                match = marker_pattern.search(token)
+                if match is not None:
+                    column_markers.append((line_number, match.group(1)))
+                elif marker_name_pattern.search(token):
+                    errors.append(
+                        "Brak dźwięku w oznaczeniu custos — "
+                        f"{self._text_spine_label(column)}, "
+                        f"linia {line_number + 1}: {token}"
+                    )
+
+            markers[column] = column_markers
+
+        for column, column_markers in markers.items():
+            marker_lines = {line_number for line_number, _pitch in column_markers}
+
+            for marker_line, pitch in column_markers:
+                annotated_note: int | None = None
+
+                for line_number in range(marker_line + 1, len(self.lines)):
+                    if line_number in marker_lines:
+                        errors.append(
+                            "Drugi custos przed nutą — "
+                            f"{self._text_spine_label(column)}, "
+                            f"linia {line_number + 1}: "
+                            f"{self.fields(line_number)[column]}"
+                        )
+                        break
+
+                    fields = self.fields(line_number)
+                    if len(fields) != self.spine_count:
+                        continue
+
+                    token = fields[column]
+                    if token in {"*^", "*v", "*x", "*+"}:
+                        errors.append(
+                            "Błędne rozdwojenie spine’u **kern — "
+                            f"{self._text_spine_label(column)}, "
+                            f"linia {line_number + 1}: {token}"
+                        )
+                        break
+                    if token == "*-":
+                        errors.append(
+                            "Brak nuty opisanej przez custos — "
+                            f"{self._text_spine_label(column)}, "
+                            f"linia {marker_line + 1}: "
+                            f"{self.fields(marker_line)[column]}"
+                        )
+                        break
+                    if token.startswith(("!", "*", "=")) or token in {"", "."}:
+                        continue
+
+                    annotated_note = line_number
+                    break
+
+                if annotated_note is None:
+                    continue
+
+                boundary_line: int | None = None
+                empty_interpretation: int | None = None
+
+                for line_number in range(annotated_note + 1, len(self.lines)):
+                    line = self.lines[line_number]
+
+                    if line.startswith("!!"):
+                        if boundary_line is None:
+                            boundary_line = line_number
+                        continue
+
+                    fields = self.fields(line_number)
+                    if len(fields) != self.spine_count:
+                        continue
+
+                    token = fields[column]
+
+                    if line_number in marker_lines:
+                        errors.append(
+                            "Drugi custos przed następną nutą — "
+                            f"{self._text_spine_label(column)}, "
+                            f"linia {line_number + 1}: {token}"
+                        )
+                        break
+
+                    if token in {"*^", "*v", "*x", "*+"}:
+                        errors.append(
+                            "Błędne rozdwojenie spine’u **kern — "
+                            f"{self._text_spine_label(column)}, "
+                            f"linia {line_number + 1}: {token}"
+                        )
+                        break
+
+                    if token == "*-":
+                        errors.append(
+                            "Brak następnej nuty po custosie — "
+                            f"{self._text_spine_label(column)}, "
+                            f"linia {marker_line + 1}: "
+                            f"{self.fields(marker_line)[column]}"
+                        )
+                        break
+
+                    if token.startswith("!"):
+                        if boundary_line is None:
+                            boundary_line = line_number
+                        continue
+
+                    if token.startswith("*"):
+                        if token == "*" and boundary_line is None:
+                            empty_interpretation = line_number
+                        continue
+
+                    if token.startswith("="):
+                        insertion_line = boundary_line if boundary_line is not None else line_number
+                        break
+
+                    if token in {"", "."}:
+                        continue
+
+                    insertion_line = boundary_line if boundary_line is not None else line_number
+                    break
+                else:
+                    errors.append(
+                        "Brak następnej nuty po custosie — "
+                        f"{self._text_spine_label(column)}, "
+                        f"linia {marker_line + 1}: "
+                        f"{self.fields(marker_line)[column]}"
+                    )
+                    continue
+
+                if errors:
+                    continue
+
+                source_fields = updates.setdefault(marker_line, self.fields(marker_line).copy())
+                source_fields[column] = "!"
+
+                if empty_interpretation is not None and empty_interpretation < insertion_line:
+                    custos_fields = updates.setdefault(
+                        empty_interpretation,
+                        self.fields(empty_interpretation).copy(),
+                    )
+                else:
+                    custos_fields = insertions.setdefault(insertion_line, ["*"] * self.spine_count)
+
+                custos_fields[column] = f"*custos:{pitch}"
+
+        if errors:
+            raise HumdrumError("\n".join(dict.fromkeys(errors)))
 
         if not updates and not insertions:
             return False
