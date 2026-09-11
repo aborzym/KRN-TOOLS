@@ -158,3 +158,24 @@ def test_adds_updates_and_removes_system_decoration() -> None:
     assert document.set_system_decoration("") is True
     assert document.system_decoration() == ""
     assert all(not line.startswith("!!!system-decoration:") for line in document.lines)
+
+
+def test_adds_segment_as_first_line() -> None:
+    document = HumdrumDocument.from_text("!!!COM: Test, Composer\n**kern\n*-\n")
+
+    assert document.set_segment("test.krn") is True
+    assert document.lines[0] == "!!!!SEGMENT: test.krn"
+    assert document.set_segment("test.krn") is False
+
+
+def test_updates_moves_and_deduplicates_segment() -> None:
+    document = HumdrumDocument.from_text(
+        "!!!COM: Test, Composer\n"
+        "!!!!SEGMENT: old.krn\n"
+        "!!!!SEGMENT: duplicate.krn\n"
+        "**kern\n*-\n"
+    )
+
+    assert document.set_segment("new.krn") is True
+    assert document.lines[0] == "!!!!SEGMENT: new.krn"
+    assert sum(line.startswith("!!!!SEGMENT:") for line in document.lines) == 1

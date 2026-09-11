@@ -284,6 +284,21 @@ class HumdrumDocument:
         self.header = self._find_header()
         return True
 
+    def set_segment(self, filename: str) -> bool:
+        prefix = "!!!!SEGMENT:"
+        replacement = f"{prefix} {filename}"
+        matches = [
+            index for index, line in enumerate(self.lines) if line.startswith(prefix)
+        ]
+        if matches == [0] and self.lines[0] == replacement:
+            return False
+
+        for index in reversed(matches):
+            del self.lines[index]
+        self.lines.insert(0, replacement)
+        self.header = self._find_header()
+        return True
+
     def to_text(self) -> str:
         text = "\n".join(self.lines)
         return text + ("\n" if self.trailing_newline else "")

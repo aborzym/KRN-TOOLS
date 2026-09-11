@@ -13,6 +13,7 @@ po wybraniu polecenia **Zapisz**.
 - podgląd bloku interpretacji w układzie odpowiadającym spine'om dokumentu;
 - edycja nazw pełnych, nazw skróconych, kodów instrumentów i grup instrumentów;
 - edycja rekordu `!!!system-decoration:`;
+- dodawanie i poprawianie rekordu `!!!!SEGMENT:` z pełną nazwą pliku;
 - generowanie kodów `*IC` za pomocą `addic`;
 - dodawanie i usuwanie linii `*IG`;
 - numerowanie taktów za pomocą `barnum`;
