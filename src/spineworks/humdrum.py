@@ -679,6 +679,253 @@ class HumdrumDocument:
         self.header = self._find_header()
         return True
 
+    @staticmethod
+    def _apply_yy_suffix(
+        token: str,
+        *,
+        duplicate_existing: bool,
+    ) -> str:
+        match = re.search(r"y+$", token)
+        if match is None:
+            return f"{token}yy"
+
+        count = len(match.group())
+        if count > 4:
+            return f"{token[:-count]}yyyy"
+        if count == 2 and duplicate_existing:
+            return f"{token[:-count]}yyyy"
+
+        return token
+
+    @classmethod
+    def _hide_kern_subtoken(
+        cls,
+        subtoken: str,
+        *,
+        duplicate_existing: bool,
+    ) -> str:
+        if not subtoken or subtoken == ".":
+            return subtoken
+
+        def hide_opening(match: re.Match[str]) -> str:
+            marker = match.group(1)
+            count = len(match.group(2))
+
+            if count == 0:
+                new_count = 2
+            elif count > 4 or count == 2 and duplicate_existing:
+                new_count = 4
+            else:
+                new_count = count
+
+            return f"{marker}{'y' * new_count}"
+
+        hidden = re.sub(r"([([])(y*)", hide_opening, subtoken)
+        return cls._apply_yy_suffix(
+            hidden,
+            duplicate_existing=duplicate_existing,
+        )
+
+    @classmethod
+    def _hide_kern_token(
+        cls,
+        token: str,
+        *,
+        duplicate_existing: bool,
+    ) -> str:
+        return " ".join(
+            cls._hide_kern_subtoken(
+                subtoken,
+                duplicate_existing=duplicate_existing,
+            )
+            for subtoken in token.split(" ")
+        )
+
+    def hide_measure_range(
+        self,
+        *,
+        start_measure: int,
+        end_measure: int,
+        kern_columns: set[int],
+        duplicate_existing: bool = False,
+    ) -> bool:
+        if start_measure > end_measure:
+            raise HumdrumError("Pierwszy takt zakresu nie może być późniejszy niż ostatni.")
+
+        initial_types = self.spine_types.copy()
+        selected_kerns = {
+            column
+            for column in kern_columns
+            if 0 <= column < len(initial_types) and initial_types[column] == "**kern"
+        }
+        if not selected_kerns:
+            raise HumdrumError("Nie wybrano żadnego spine’u **kern.")
+
+        if self.header.staff_line is not None:
+            initial_staffs = self.fields(self.header.staff_line)
+        else:
+            initial_staffs = [""] * len(initial_types)
+
+        active_spines: list[tuple[str, bool]] = []
+        for column, spine_type in enumerate(initial_types):
+            hidden = False
+
+            if spine_type == "**kern":
+                hidden = column in selected_kerns
+            elif spine_type == "**dynam":
+                staff = initial_staffs[column] if column < len(initial_staffs) else ""
+                related_kerns = {
+                    kern_column
+                    for kern_column, kern_type in enumerate(initial_types)
+                    if kern_type == "**kern"
+                    and staff.startswith("*staff")
+                    and kern_column < len(initial_staffs)
+                    and initial_staffs[kern_column] == staff
+                }
+                hidden = bool(related_kerns) and related_kerns <= selected_kerns
+
+            active_spines.append((spine_type, hidden))
+
+        current_measure: int | None = None
+        updates: dict[int, list[str]] = {}
+
+        for line_number in range(
+            self.header.exclusive_line + 1,
+            len(self.lines),
+        ):
+            line = self.lines[line_number]
+
+            if line.startswith("!!") or not line:
+                continue
+
+            fields = line.split("\t")
+            if len(fields) != len(active_spines):
+                raise HumdrumError(
+                    f"Nieprawidłowa liczba spine’ów — linia {line_number + 1}: {line}"
+                )
+
+            if line.startswith("="):
+                numbered_barline = next(
+                    (match for token in fields if (match := re.match(r"^=+(\d+)", token))),
+                    None,
+                )
+                if numbered_barline is not None:
+                    current_measure = int(numbered_barline.group(1))
+                continue
+
+            if line.startswith("*"):
+                if any(token in {"*x", "*+"} for token in fields):
+                    bad_token = next(token for token in fields if token in {"*x", "*+"})
+                    raise HumdrumError(
+                        f"Nieobsługiwany manipulator spine’u — linia {line_number + 1}: {bad_token}"
+                    )
+
+                next_spines: list[tuple[str, bool]] = []
+                column = 0
+
+                while column < len(fields):
+                    token = fields[column]
+                    spine_type, hidden = active_spines[column]
+
+                    if token == "*^":
+                        next_spines.append((spine_type, hidden))
+                        next_spines.append((spine_type, hidden))
+                        column += 1
+                        continue
+
+                    if token == "*v":
+                        merge_end = column
+                        while merge_end < len(fields) and fields[merge_end] == "*v":
+                            merge_end += 1
+
+                        if merge_end - column < 2:
+                            raise HumdrumError(
+                                f"Nieprawidłowe scalenie spine’ów — linia {line_number + 1}: {line}"
+                            )
+
+                        merged_spines = active_spines[column:merge_end]
+                        merged_type = merged_spines[0][0]
+                        if any(
+                            candidate_type != merged_type
+                            for candidate_type, _hidden in merged_spines
+                        ):
+                            raise HumdrumError(
+                                f"Scalenie spine’ów różnych typów — linia {line_number + 1}: {line}"
+                            )
+
+                        next_spines.append(
+                            (
+                                merged_type,
+                                any(
+                                    merged_hidden
+                                    for _candidate_type, merged_hidden in merged_spines
+                                ),
+                            )
+                        )
+                        column = merge_end
+                        continue
+
+                    if token == "*-":
+                        column += 1
+                        continue
+
+                    next_spines.append((spine_type, hidden))
+                    column += 1
+
+                active_spines = next_spines
+                continue
+
+            if line.startswith("!"):
+                continue
+
+            if (
+                current_measure is None
+                or current_measure < start_measure
+                or current_measure > end_measure
+            ):
+                continue
+
+            changed_fields = fields.copy()
+            line_changed = False
+
+            for column, (spine_type, hidden) in enumerate(active_spines):
+                if not hidden:
+                    continue
+
+                token = fields[column]
+                if not token or token == ".":
+                    continue
+
+                if spine_type == "**kern":
+                    changed_token = self._hide_kern_token(
+                        token,
+                        duplicate_existing=duplicate_existing,
+                    )
+
+                elif spine_type == "**dynam":
+                    changed_token = self._apply_yy_suffix(
+                        token,
+                        duplicate_existing=duplicate_existing,
+                    )
+                else:
+                    continue
+
+                if changed_token != token:
+                    changed_fields[column] = changed_token
+                    line_changed = True
+
+            if line_changed:
+                updates[line_number] = changed_fields
+
+        if not updates:
+            return False
+
+        for line_number, fields in updates.items():
+            self.lines[line_number] = "\t".join(fields)
+
+        self.header = self._find_header()
+        return True
+
     def to_text(self) -> str:
         text = "\n".join(self.lines)
         return text + ("\n" if self.trailing_newline else "")

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -24,7 +25,9 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -190,6 +193,11 @@ class MainWindow(QMainWindow):
         self.custos_button.setEnabled(False)
         self.custos_button.clicked.connect(self.apply_custos)
 
+        self.hide_range_button = QPushButton("Ukryj zakres")
+        self.hide_range_button.setObjectName("primaryButton")
+        self.hide_range_button.setEnabled(False)
+        self.hide_range_button.clicked.connect(self.apply_hidden_measure_range)
+
         self.breaks_button = QPushButton("Usuń łamania")
         self.breaks_button.setObjectName("dangerButton")
         self.breaks_button.setEnabled(False)
@@ -222,6 +230,12 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Fixed,
         )
         operations.addWidget(self.custos_button, 1, 2)
+
+        self.hide_range_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        operations.addWidget(self.hide_range_button, 1, 3)
 
         for column, button in enumerate((self.breaks_button, self.remove_spine_button)):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -282,6 +296,9 @@ class MainWindow(QMainWindow):
         self.segment_button.setEnabled(True)
         self.italics_button.setEnabled(True)
         self.custos_button.setEnabled(True)
+        self.hide_range_button.setEnabled(
+            any(spine_type == "**kern" for spine_type in document.spine_types)
+        )
         self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
@@ -468,6 +485,138 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Oznaczono kursywę w tekście")
         else:
             self.statusBar().showMessage("Nie znaleziono znaczników kursywy w tekście")
+
+    def _ask_hidden_measure_range(
+        self,
+    ) -> tuple[int, int, set[int], bool] | None:
+        if self.document is None:
+            return None
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Ukryj zakres")
+        dialog.setMinimumWidth(560)
+        form = QFormLayout(dialog)
+
+        start_input = QSpinBox(dialog)
+        start_input.setRange(0, 999_999)
+        start_input.setValue(1)
+        form.addRow("Od taktu:", start_input)
+
+        end_input = QSpinBox(dialog)
+        end_input.setRange(0, 999_999)
+        end_input.setValue(1)
+        form.addRow("Do taktu:", end_input)
+
+        duplicate_checkbox = QCheckBox(
+            "Zamień istniejące yy na yyyy",
+            dialog,
+        )
+        duplicate_checkbox.setChecked(False)
+        form.addRow(duplicate_checkbox)
+
+        spine_widget = QWidget(dialog)
+        spine_layout = QVBoxLayout(spine_widget)
+        spine_layout.setContentsMargins(0, 0, 0, 0)
+
+        descriptions = self._spine_descriptions()
+        spine_checkboxes: list[tuple[int, QCheckBox]] = []
+        for column, spine_type in enumerate(self.document.spine_types):
+            if spine_type != "**kern":
+                continue
+
+            checkbox = QCheckBox(descriptions[column], spine_widget)
+            spine_layout.addWidget(checkbox)
+            spine_checkboxes.append((column, checkbox))
+
+        spine_layout.addStretch(1)
+
+        spine_scroll = QScrollArea(dialog)
+        spine_scroll.setWidgetResizable(True)
+        spine_scroll.setMinimumHeight(180)
+        spine_scroll.setWidget(spine_widget)
+        form.addRow("Spine’y **kern:", spine_scroll)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Ukryj")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        while dialog.exec() == QDialog.DialogCode.Accepted:
+            start_measure = start_input.value()
+            end_measure = end_input.value()
+            selected_columns = {
+                column for column, checkbox in spine_checkboxes if checkbox.isChecked()
+            }
+
+            if start_measure > end_measure:
+                QMessageBox.warning(
+                    dialog,
+                    "Nieprawidłowy zakres",
+                    "Pierwszy takt nie może być późniejszy niż ostatni.",
+                )
+                continue
+
+            if not selected_columns:
+                QMessageBox.warning(
+                    dialog,
+                    "Nie wybrano spine’u",
+                    "Wybierz co najmniej jeden spine **kern.",
+                )
+                continue
+
+            return (
+                start_measure,
+                end_measure,
+                selected_columns,
+                duplicate_checkbox.isChecked(),
+            )
+
+        return None
+
+    def apply_hidden_measure_range(self) -> None:
+        if self.document is None:
+            return
+
+        choice = self._ask_hidden_measure_range()
+        if choice is None:
+            return
+
+        (
+            start_measure,
+            end_measure,
+            selected_columns,
+            duplicate_existing,
+        ) = choice
+        before = self.document.to_text()
+
+        try:
+            changed = self.document.hide_measure_range(
+                start_measure=start_measure,
+                end_measure=end_measure,
+                kern_columns=selected_columns,
+                duplicate_existing=duplicate_existing,
+            )
+        except HumdrumError as error:
+            self._show_copyable_error(
+                "Nie można ukryć zakresu",
+                str(error),
+            )
+            return
+
+        if changed:
+            self.undo_texts.append(before)
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self.statusBar().showMessage(f"Ukryto takty {start_measure}–{end_measure}")
+        else:
+            self.statusBar().showMessage(
+                f"Brak danych do ukrycia w taktach {start_measure}–{end_measure}"
+            )
 
     def apply_custos(self) -> None:
         if self.document is None:
