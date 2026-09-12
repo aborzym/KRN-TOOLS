@@ -18,6 +18,9 @@ po wybraniu polecenia **Zapisz**.
 - przenoszenie oznaczeń custosów z komentarzy lokalnych spine’ów `**kern`
   do rekordów interpretacji `*custos:dźwięk`, umieszczanych przed komentarzami,
   kreską taktową albo następną nutą;
+- ukrywanie nut, pauz, łuków, ligatur i powiązanej dynamiki w wybranych
+  spine’ach `**kern` oraz w domkniętym zakresie taktów, z obsługą `*^`, `*v`
+  i opcjonalnego rozszerzania istniejących oznaczeń `yy` do maksymalnie `yyyy`;
 - dodawanie i poprawianie rekordu `!!!!SEGMENT:` z pełną nazwą pliku;
 - generowanie kodów `*IC` za pomocą `addic`;
 - dodawanie i usuwanie linii `*IG`;

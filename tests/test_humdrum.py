@@ -410,3 +410,194 @@ def test_reports_custos_errors_without_changing_document(
 
     assert message in str(caught.value)
     assert document.lines == original_lines
+
+
+def test_hides_selected_kern_and_dynam_in_inclusive_measure_range() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\t**dynam\n"
+        "*staff2\t*staff2\t*staff1\t*staff1\n"
+        "=1\t=1\t=1\t=1\n"
+        "4c\tf\t4e\tp\n"
+        "=2\t=2\t=2\t=2\n"
+        "(16ccc#\\;LL\tf<\t4e\tpp\n"
+        "4d)\t>\t4f\t<\n"
+        "=3\t=3\t=3\t=3\n"
+        "[yy4eyy\tppyy\t[4g\tmf\n"
+        "4e]\t<\t4g]\t>\n"
+        "=4\t=4\t=4\t=4\n"
+        "4f\t.\t4a\tff\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+
+    assert (
+        document.hide_measure_range(
+            start_measure=2,
+            end_measure=3,
+            kern_columns={0},
+            duplicate_existing=True,
+        )
+        is True
+    )
+    assert document.lines == [
+        "**kern\t**dynam\t**kern\t**dynam",
+        "*staff2\t*staff2\t*staff1\t*staff1",
+        "=1\t=1\t=1\t=1",
+        "4c\tf\t4e\tp",
+        "=2\t=2\t=2\t=2",
+        "(yy16ccc#\\;LLyy\tf<yy\t4e\tpp",
+        "4d)yy\t>yy\t4f\t<",
+        "=3\t=3\t=3\t=3",
+        "[yyyy4eyyyy\tppyyyy\t[4g\tmf",
+        "4e]yy\t<yy\t4g]\t>",
+        "=4\t=4\t=4\t=4",
+        "4f\t.\t4a\tff",
+        "*-\t*-\t*-\t*-",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("selected_columns", "expected_dynam"),
+    [
+        ({0}, "f"),
+        ({1}, "f"),
+        ({0, 1}, "fyy"),
+    ],
+)
+def test_hides_shared_dynam_only_when_all_related_kerns_are_selected(
+    selected_columns: set[int],
+    expected_dynam: str,
+) -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\t**dynam\n"
+        "*staff1\t*staff1\t*staff1\n"
+        "=2\t=2\t=2\n"
+        "4c\t4e\tf\n"
+        "=3\t=3\t=3\n"
+        "4d\t4f\t.\n"
+        "*-\t*-\t*-\n"
+    )
+
+    assert (
+        document.hide_measure_range(
+            start_measure=2,
+            end_measure=2,
+            kern_columns=selected_columns,
+        )
+        is True
+    )
+
+    expected_first_kern = "4cyy" if 0 in selected_columns else "4c"
+    expected_second_kern = "4eyy" if 1 in selected_columns else "4e"
+    assert document.lines[3] == (f"{expected_first_kern}\t{expected_second_kern}\t{expected_dynam}")
+
+
+def test_hides_both_split_branches_and_the_merged_kern() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\n"
+        "*staff1\t*staff1\n"
+        "=2a\t=2a\n"
+        "4c\tf\n"
+        "*^\t*\n"
+        "(4d\t4e\t<\n"
+        "4f\t4g\t.\n"
+        "*v\t*v\t*\n"
+        "4a\tff\n"
+        "=3\t=3\n"
+        "4b\tp\n"
+        "*-\t*-\n"
+    )
+
+    assert (
+        document.hide_measure_range(
+            start_measure=2,
+            end_measure=2,
+            kern_columns={0},
+        )
+        is True
+    )
+    assert document.lines == [
+        "**kern\t**dynam",
+        "*staff1\t*staff1",
+        "=2a\t=2a",
+        "4cyy\tfyy",
+        "*^\t*",
+        "(yy4dyy\t4eyy\t<yy",
+        "4fyy\t4gyy\t.",
+        "*v\t*v\t*",
+        "4ayy\tffyy",
+        "=3\t=3",
+        "4b\tp",
+        "*-\t*-",
+    ]
+
+
+@pytest.mark.parametrize(
+    "manipulator_line",
+    [
+        "*x\t*x",
+        "*+\t*",
+    ],
+)
+def test_rejects_unsupported_manipulators_when_hiding_range(
+    manipulator_line: str,
+) -> None:
+    source = (
+        f"**kern\t**kern\n*staff2\t*staff1\n=2\t=2\n4c\t4e\n{manipulator_line}\n4d\t4f\n*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+    original_lines = document.lines.copy()
+
+    with pytest.raises(HumdrumError, match="Nieobsługiwany manipulator spine’u"):
+        document.hide_measure_range(
+            start_measure=2,
+            end_measure=2,
+            kern_columns={0},
+        )
+
+    assert document.lines == original_lines
+
+
+def test_does_not_duplicate_existing_yy_by_default() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\n*staff1\t*staff1\n=2\t=2\n[yy4cyy\tppyy\n4d)yy\t<yy\n*-\t*-\n"
+    )
+    original_lines = document.lines.copy()
+
+    assert (
+        document.hide_measure_range(
+            start_measure=2,
+            end_measure=2,
+            kern_columns={0},
+        )
+        is False
+    )
+    assert document.lines == original_lines
+
+
+def test_caps_existing_yy_at_four() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\n"
+        "*staff1\t*staff1\n"
+        "=2\t=2\n"
+        "[yyyyyy4cyyyyyy\tppyyyyyy\n"
+        "4d)yyyyyy\t<yyyyyy\n"
+        "*-\t*-\n"
+    )
+
+    assert (
+        document.hide_measure_range(
+            start_measure=2,
+            end_measure=2,
+            kern_columns={0},
+            duplicate_existing=True,
+        )
+        is True
+    )
+    assert document.lines == [
+        "**kern\t**dynam",
+        "*staff1\t*staff1",
+        "=2\t=2",
+        "[yyyy4cyyyy\tppyyyy",
+        "4d)yyyy\t<yyyy",
+        "*-\t*-",
+    ]
