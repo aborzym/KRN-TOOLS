@@ -373,8 +373,8 @@ class HumdrumDocument:
                     syllable_lines.append(line_number)
                     tokens.append(token)
 
-            starts = [token.startswith("/") for token in tokens]
-            ends = [token.endswith("/") for token in tokens]
+            starts = [token.startswith(("/", "-/")) for token in tokens]
+            ends = [token.endswith(("/", "/-")) for token in tokens]
             consumed_starts: set[int] = set()
             ranges: list[tuple[int, int]] = []
             active_start: int | None = None
@@ -421,12 +421,20 @@ class HumdrumDocument:
 
                 fields = updates.setdefault(line_number, self.fields(line_number).copy())
                 token = fields[column]
-                if starts[position]:
-                    token = token[1:]
-                if ends[position] and token.endswith("/"):
-                    token = token[:-1]
-                fields[column] = token
 
+                if starts[position]:
+                    if token.startswith("-/"):
+                        token = "-" + token[2:]
+                    else:
+                        token = token[1:]
+
+                if ends[position]:
+                    if token.endswith("/-"):
+                        token = token[:-2] + "-"
+                    elif token.endswith("/"):
+                        token = token[:-1]
+
+                fields[column] = token
             for start_line, end_line in ranges:
                 previous_syllables = [
                     line_number for line_number in syllable_lines if line_number < start_line
