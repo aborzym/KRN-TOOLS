@@ -306,6 +306,37 @@ def test_leaves_text_without_italic_markers_unchanged() -> None:
     assert document.to_text() == source
 
 
+def test_does_not_place_text_italics_in_spine_manipulator_records() -> None:
+    document = HumdrumDocument.from_text(
+        "**text\t**kern\n"
+        "Ky-\t4c\n"
+        "*\t*^\n"
+        "*\t*v\t*v\n"
+        "/ri-\t4d\n"
+        "e/\t4e\n"
+        "*\t*^\n"
+        "*\t*v\t*v\n"
+        "A-\t4f\n"
+        "*-\t*-\n"
+    )
+
+    assert document.mark_text_italics() is True
+    assert document.lines == [
+        "**text\t**kern",
+        "Ky-\t4c",
+        "*\t*^",
+        "*\t*v\t*v",
+        "*ij\t*",
+        "ri-\t4d",
+        "e\t4e",
+        "*Xij\t*",
+        "*\t*^",
+        "*\t*v\t*v",
+        "A-\t4f",
+        "*-\t*-",
+    ]
+
+
 def test_corrects_custos_comments_before_barline() -> None:
     document = HumdrumDocument.from_text(
         "**kern\t**kern\t**kern\n"

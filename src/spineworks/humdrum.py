@@ -329,6 +329,7 @@ class HumdrumDocument:
             for column, spine_type in enumerate(self.spine_types)
             if spine_type in {"**text", "**mod-text"}
         ]
+        spine_manipulators = {"*^", "*v", "*x", "*+", "*-"}
         updates: dict[int, list[str]] = {}
         insertions: dict[int, list[str]] = {}
         errors: list[str] = []
@@ -449,6 +450,9 @@ class HumdrumDocument:
                             for line_number in range(start_line - 1, previous_line, -1)
                             if self.lines[line_number].startswith("*")
                             and len(self.fields(line_number)) == self.spine_count
+                            and not any(
+                                token in spine_manipulators for token in self.fields(line_number)
+                            )
                             and self.fields(line_number)[column] == "*"
                         ),
                         None,
@@ -478,6 +482,9 @@ class HumdrumDocument:
                         for line_number in range(end_line + 1, next_syllable)
                         if self.lines[line_number].startswith("*")
                         and len(self.fields(line_number)) == self.spine_count
+                        and not any(
+                            token in spine_manipulators for token in self.fields(line_number)
+                        )
                         and self.fields(line_number)[column] == "*"
                     ),
                     None,
