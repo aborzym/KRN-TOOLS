@@ -3,8 +3,16 @@ from itertools import pairwise
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QColor, QIcon, QKeySequence
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QColor,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -28,6 +36,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QStyle,
+    QStyleOptionButton,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -134,6 +144,7 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setFixedWidth(row_header_width)
         self.table.verticalHeader().setSectionsClickable(True)
         self.table.verticalHeader().sectionClicked.connect(self.toggle_row_editing)
+        self.table.verticalHeader().setVisible(False)
         layout.addWidget(self.table, 1)
 
         decoration_row = QWidget(self)
@@ -310,6 +321,7 @@ class MainWindow(QMainWindow):
         self._sync_ig_button()
         self.file_label.setText(path.name)
         self._refresh_table()
+        self.table.verticalHeader().setVisible(True)
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
 
     def save_file(self) -> bool:
@@ -1016,6 +1028,26 @@ class MainWindow(QMainWindow):
         self.ig_button.style().unpolish(self.ig_button)
         self.ig_button.style().polish(self.ig_button)
 
+    def _edit_checkbox_icon(self, checked: bool) -> QIcon:
+        size = QSize(18, 18)
+        pixmap = QPixmap(size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+
+        option = QStyleOptionButton()
+        option.rect = pixmap.rect()
+        option.state = QStyle.StateFlag.State_Enabled
+        option.state |= QStyle.StateFlag.State_On if checked else QStyle.StateFlag.State_Off
+
+        painter = QPainter(pixmap)
+        self.style().drawControl(
+            QStyle.ControlElement.CE_CheckBox,
+            option,
+            painter,
+            self,
+        )
+        painter.end()
+        return QIcon(pixmap)
+
     def _refresh_table(self) -> None:
         if self.document is None:
             return
@@ -1081,18 +1113,12 @@ class MainWindow(QMainWindow):
                 header_item.setBackground(QColor("#294234"))
             self.table.setHorizontalHeaderItem(column, header_item)
         self.editable_row_indexes.clear()
-        labels = []
         for row, (label, _, kind, _) in enumerate(rows):
+            header_item = QTableWidgetItem(label)
             if kind:
                 self.editable_row_indexes[row] = kind
-                labels.append(f"{'☑' if kind in self.enabled_edit_rows else '☐'} {label}")
-            else:
-                labels.append(label)
-        for row, label in enumerate(labels):
-            header_item = QTableWidgetItem(label)
-            if row in self.editable_row_indexes:
+                header_item.setIcon(self._edit_checkbox_icon(kind in self.enabled_edit_rows))
                 header_item.setToolTip("Edytuj wiersz")
-
             self.table.setVerticalHeaderItem(row, header_item)
         self.row_inputs.clear()
 
