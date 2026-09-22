@@ -331,7 +331,7 @@ class HumdrumDocument:
 
         return f"staff {staff_number} ({instrument})"
 
-    def mark_text_italics(self) -> bool:
+    def mark_text_italics(self) -> tuple[bool, list[str]]:
         text_columns = [
             column
             for column, spine_type in enumerate(self.spine_types)
@@ -397,6 +397,7 @@ class HumdrumDocument:
                             f"linia {active_start + 1}: "
                             f"{self.fields(active_start)[column]}"
                         )
+
                     active_start = line_number
 
                 if ends[position]:
@@ -423,8 +424,16 @@ class HumdrumDocument:
                     f"linia {active_start + 1}: "
                     f"{self.fields(active_start)[column]}"
                 )
+            valid_marker_lines = {
+                line_number
+                for start_line, end_line in ranges
+                for line_number in syllable_lines
+                if start_line <= line_number <= end_line
+            }
 
             for position, line_number in enumerate(syllable_lines):
+                if line_number not in valid_marker_lines:
+                    continue
                 if not starts[position] and not ends[position]:
                     continue
 
@@ -505,11 +514,8 @@ class HumdrumDocument:
                     )
                 closing_fields[column] = "*Xij"
 
-        if errors:
-            raise HumdrumError("\n".join(errors))
-
         if not updates and not insertions:
-            return False
+            return False, errors
 
         for line_number, fields in updates.items():
             self.lines[line_number] = "\t".join(fields)
@@ -518,7 +524,7 @@ class HumdrumDocument:
             self.lines.insert(line_number, "\t".join(fields))
 
         self.header = self._find_header()
-        return True
+        return True, errors
 
     def correct_custos(self) -> bool:
         marker_pattern = re.compile(r"(?::|=|&colon;)custos(?:[ \t]+|:)([^ \t:]+)")

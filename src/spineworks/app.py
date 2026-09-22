@@ -476,7 +476,7 @@ class MainWindow(QMainWindow):
 
         before = self.document.to_text()
         try:
-            changed = self.document.mark_text_italics()
+            changed, warnings = self.document.mark_text_italics()
         except HumdrumError as error:
             self._show_copyable_error(
                 "Nie można oznaczyć kursywy",
@@ -488,9 +488,22 @@ class MainWindow(QMainWindow):
             self.undo_texts.append(before)
             self.undo_action.setEnabled(True)
             self._refresh_table()
-            self.statusBar().showMessage("Oznaczono kursywę w tekście")
+            if warnings:
+                self.statusBar().showMessage(
+                    "Oznaczono poprawne fragmenty kursywy; część wymaga kontroli"
+                )
+            else:
+                self.statusBar().showMessage("Oznaczono kursywę w tekście")
+        elif warnings:
+            self.statusBar().showMessage("Nie oznaczono kursywy — znaleziono błędne znaczniki")
         else:
             self.statusBar().showMessage("Nie znaleziono znaczników kursywy w tekście")
+
+        if warnings:
+            self._show_copyable_error(
+                "Kursywa przetworzona z ostrzeżeniami",
+                "\n".join(warnings),
+            )
 
     def _ask_hidden_measure_range(
         self,
