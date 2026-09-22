@@ -186,7 +186,7 @@ def test_updates_moves_and_deduplicates_segment() -> None:
 def test_marks_text_italics_using_existing_interpretation_records() -> None:
     document = HumdrumDocument.from_text("**text\nKy-\n*\n! komentarz\n/ri-\ne/\n*\nA-\n*-\n")
 
-    assert document.mark_text_italics() is True
+    assert document.mark_text_italics() == (True, [])
     assert document.lines == [
         "**text",
         "Ky-",
@@ -205,7 +205,7 @@ def test_inserts_text_italics_around_local_comments() -> None:
         "**text\nGlo-\n! pierwszy komentarz\n! drugi komentarz\n/ri-a/\nPa-\ntri\n*-\n"
     )
 
-    assert document.mark_text_italics() is True
+    assert document.mark_text_italics() == (True, [])
     assert document.lines == [
         "**text",
         "Glo-",
@@ -223,7 +223,7 @@ def test_inserts_text_italics_around_local_comments() -> None:
 def test_joins_adjacent_text_italic_ranges() -> None:
     document = HumdrumDocument.from_text("**text\n/Do\nmi\nne/\n/De-\nus/\nA-\nmen\n*-\n")
 
-    assert document.mark_text_italics() is True
+    assert document.mark_text_italics() == (True, [])
     assert document.lines == [
         "**text",
         "*ij",
@@ -250,10 +250,10 @@ def test_reports_all_text_italic_errors_with_staff_context() -> None:
     )
     document = HumdrumDocument.from_text(source)
 
-    with pytest.raises(HumdrumError) as caught:
-        document.mark_text_italics()
+    changed, warnings = document.mark_text_italics()
 
-    assert str(caught.value).splitlines() == [
+    assert changed is False
+    assert warnings == [
         "Brak zamknięcia kursywy — staff 2 (vl), linia 5: /Ky-",
         "Brak otwarcia kursywy — staff 1 (Violoncello), linia 5: -e/",
     ]
@@ -266,10 +266,10 @@ def test_reports_text_italic_spine_split_as_an_error() -> None:
     )
     document = HumdrumDocument.from_text(source)
 
-    with pytest.raises(HumdrumError) as caught:
-        document.mark_text_italics()
+    changed, warnings = document.mark_text_italics()
 
-    assert str(caught.value) == ("Błędne rozdwojenie spine’u **text — staff 1 (V), linia 6: *^")
+    assert changed is False
+    assert warnings == ["Błędne rozdwojenie spine’u **text — staff 1 (V), linia 6: *^"]
     assert document.to_text() == source
 
 
@@ -284,7 +284,7 @@ def test_combines_text_italic_markers_in_shared_records() -> None:
         "*-\t*-\t*-\n"
     )
 
-    assert document.mark_text_italics() is True
+    assert document.mark_text_italics() == (True, [])
     assert document.lines == [
         "**kern\t**text\t**mod-text",
         "*staff1\t*staff1\t*staff1",
@@ -302,7 +302,7 @@ def test_leaves_text_without_italic_markers_unchanged() -> None:
     source = "**text\nKy-\nri-\ne\n*-\n"
     document = HumdrumDocument.from_text(source)
 
-    assert document.mark_text_italics() is False
+    assert document.mark_text_italics() == (False, [])
     assert document.to_text() == source
 
 
@@ -320,7 +320,7 @@ def test_does_not_place_text_italics_in_spine_manipulator_records() -> None:
         "*-\t*-\n"
     )
 
-    assert document.mark_text_italics() is True
+    assert document.mark_text_italics() == (True, [])
     assert document.lines == [
         "**text\t**kern",
         "Ky-\t4c",
@@ -334,6 +334,39 @@ def test_does_not_place_text_italics_in_spine_manipulator_records() -> None:
         "*\t*v\t*v",
         "A-\t4f",
         "*-\t*-",
+    ]
+
+
+def test_marks_valid_italics_and_reports_invalid_fragments() -> None:
+    source = (
+        "**kern\t**text\t**kern\t**text\n"
+        "*staff2\t*staff2\t*staff1\t*staff1\n"
+        "*I'vl\t*\t*I'vc\t*\n"
+        "4c\t/Ky-\t4C\t/Do-\n"
+        "4d\tri-\t4D\tmi\n"
+        "4e\te/\t4E\tne\n"
+        "4f\tA-\t4F\tmen\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    changed, warnings = document.mark_text_italics()
+
+    assert changed is True
+    assert warnings == [
+        "Brak zamknięcia kursywy — staff 1 (vc), linia 4: /Do-",
+    ]
+    assert document.lines == [
+        "**kern\t**text\t**kern\t**text",
+        "*staff2\t*staff2\t*staff1\t*staff1",
+        "*I'vl\t*\t*I'vc\t*",
+        "*\t*ij\t*\t*",
+        "4c\tKy-\t4C\t/Do-",
+        "4d\tri-\t4D\tmi",
+        "4e\te\t4E\tne",
+        "*\t*Xij\t*\t*",
+        "4f\tA-\t4F\tmen",
+        "*-\t*-\t*-\t*-",
     ]
 
 
