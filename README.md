@@ -100,9 +100,9 @@ pyinstaller --noconfirm --clean SPINEWORKS.spec
 
 ## Pakiety instalacyjne
 
-Wydanie 1.1.0 jest przygotowywane dla następujących platform:
+Wydanie 2.0.0 jest przygotowywane dla następujących platform:
 
-- Linux `x86_64` — `SPINEWORKS-1.1.0-linux-x86_64.deb`;
-- macOS Apple Silicon `arm64` — `SPINEWORKS-1.1.0-macos-arm64.dmg`.
+- Linux `x86_64` — `SPINEWORKS-2.0.0-linux-x86_64.deb`;
+- macOS Apple Silicon `arm64` — `SPINEWORKS-2.0.0-macos-arm64.dmg`.
 
 Wersja dla macOS Intel `x86_64` zostanie dodana oddzielnie.
