@@ -141,6 +141,14 @@ class HumdrumDocument:
                 return fields
         return ["*"] * self.spine_count
 
+    def set_instrument_classes(self, values: list[str]) -> bool:
+        return self._set_existing_prefixed_row(
+            self.header.instrument_class_line,
+            values,
+            "*IC",
+            "klasy",
+        )
+
     def instrument_groups(self) -> list[str]:
         if self.header.instrument_group_line is None:
             return ["*"] * self.spine_count

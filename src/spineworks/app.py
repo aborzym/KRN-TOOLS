@@ -59,6 +59,7 @@ class MainWindow(QMainWindow):
     EDITABLE_ROWS: ClassVar[dict[str, str]] = {
         "instrument_name_line": '*I"',
         "instrument_abbr_line": "*I'",
+        "instrument_class_line": "*IC",
         "instrument_code_line": "*",
         "instrument_group_line": "*IG",
     }
@@ -126,6 +127,11 @@ class MainWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        row_labels = [*self.ROW_NAMES.values(), "Kod instrumentu"]
+        row_header_width = (
+            max(self.table.fontMetrics().horizontalAdvance(label) for label in row_labels) + 32
+        )
+        self.table.verticalHeader().setFixedWidth(row_header_width)
         self.table.verticalHeader().setSectionsClickable(True)
         self.table.verticalHeader().sectionClicked.connect(self.toggle_row_editing)
         layout.addWidget(self.table, 1)
@@ -168,7 +174,7 @@ class MainWindow(QMainWindow):
         self.barnum_button.setEnabled(False)
         self.barnum_button.clicked.connect(self.apply_barnum)
 
-        self.empty_spine_button = QPushButton("Dodaj pusty spine")
+        self.empty_spine_button = QPushButton("Dodaj spine")
         self.empty_spine_button.setObjectName("primaryButton")
         self.empty_spine_button.setEnabled(False)
         self.empty_spine_button.clicked.connect(self.add_empty_spine)
@@ -212,8 +218,8 @@ class MainWindow(QMainWindow):
             self.addic_button,
             self.ig_button,
             self.barnum_button,
-            self.empty_spine_button,
             self.kern_spine_button,
+            self.empty_spine_button,
         ]
         for column, button in enumerate(primary_operations):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -669,6 +675,10 @@ class MainWindow(QMainWindow):
                 changed |= self.document.set_instrument_abbreviations(
                     self._row_values("instrument_abbr_line")
                 )
+            if "instrument_class_line" in self.enabled_edit_rows:
+                changed |= self.document.set_instrument_classes(
+                    self._row_values("instrument_class_line")
+                )
             if "instrument_code_line" in self.enabled_edit_rows:
                 codes = [
                     f"*{value}" if value else "*"
@@ -996,6 +1006,7 @@ class MainWindow(QMainWindow):
     def _refresh_table(self) -> None:
         if self.document is None:
             return
+        vertical_scroll = self.table.verticalScrollBar().value()
         self.field_edits_dirty = False
         self.undo_action.setEnabled(bool(self.undo_texts))
         self.remove_spine_button.setEnabled(self.document.spine_count > 1)
@@ -1025,14 +1036,22 @@ class MainWindow(QMainWindow):
             )
 
         def row_order(row):
-            label, line_number, _, _ = row
-            if label == "Grupa instrumentu" and line_number == -2:
-                class_line = self.document.header.instrument_class_line
-                return (class_line + 0.5) if class_line is not None else float("inf") - 1
-            return line_number if line_number >= 0 else float("inf")
+            label, _, _, _ = row
+            order = {
+                "Typ spine’u": 0,
+                "Part": 1,
+                "Staff": 2,
+                "Nazwa pełna": 3,
+                "Nazwa skrócona": 4,
+                "Kod instrumentu": 5,
+                "Klasa instrumentu": 6,
+                "Grupa instrumentu": 7,
+            }
+            return order[label]
 
         rows.sort(key=row_order)
-
+        available_edit_rows = {kind for _, _, kind, _ in rows if kind is not None}
+        self.enabled_edit_rows.intersection_update(available_edit_rows)
         self.table.clearContents()
         self.table.setRowCount(0)
         self.table.setRowCount(len(rows))
@@ -1058,8 +1077,12 @@ class MainWindow(QMainWindow):
                 labels.append(label)
         for row, label in enumerate(labels):
             header_item = QTableWidgetItem(label)
+            if row in self.editable_row_indexes:
+                header_item.setToolTip("Edytuj wiersz")
+
             self.table.setVerticalHeaderItem(row, header_item)
         self.row_inputs.clear()
+
         for row, (label, line_number, kind, fixed_prefix) in enumerate(rows):
             if label == "Klasa instrumentu":
                 values = self.document.instrument_classes()
@@ -1106,6 +1129,7 @@ class MainWindow(QMainWindow):
                     self.row_inputs.setdefault(kind, {})[column] = field
                     self.table.setCellWidget(row, column, editor)
                     continue
+
                 item = QTableWidgetItem(value)
                 item.setFlags(
                     item.flags() & ~Qt.ItemFlag.ItemIsEditable & ~Qt.ItemFlag.ItemIsSelectable
@@ -1113,18 +1137,19 @@ class MainWindow(QMainWindow):
                 if self.document.spine_types[column] == "**kern":
                     item.setBackground(QColor("#18271e"))
                 self.table.setItem(row, column, item)
-        editable_fields = [
-            field
-            for kind, fields in self.row_inputs.items()
-            if kind in self.enabled_edit_rows
-            for field in fields.values()
-        ]
+                editable_fields = [
+                    field
+                    for kind, fields in self.row_inputs.items()
+                    if kind in self.enabled_edit_rows
+                    for field in fields.values()
+                ]
         for current, following in pairwise(editable_fields):
             QWidget.setTabOrder(current, following)
         self.table.resizeRowsToContents()
         self.table.resizeColumnsToContents()
         for column in range(self.table.columnCount()):
             self.table.setColumnWidth(column, max(140, self.table.columnWidth(column)))
+        self.table.verticalScrollBar().setValue(vertical_scroll)
         self._update_window_title()
 
     def _ensure_column_text_width(self, column: int, text: str) -> None:

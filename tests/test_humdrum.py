@@ -632,3 +632,13 @@ def test_caps_existing_yy_at_four() -> None:
         "4d)yyyy\t<yyyy",
         "*-\t*-",
     ]
+
+
+def test_edits_existing_instrument_classes() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**text\t**kern\n*Ivioln\t*\t*Icello\n*ICstr\t*\t*ICstr\n*-\t*-\t*-\n"
+    )
+
+    assert document.set_instrument_classes(["vox", "pomijane", "klav"]) is True
+    assert document.lines[2] == "*ICvox\t*\t*ICklav"
+    assert document.set_instrument_classes(["vox", "", "klav"]) is False
