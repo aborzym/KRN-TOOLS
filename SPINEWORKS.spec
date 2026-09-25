@@ -1,15 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import sys
+import tomllib
 from pathlib import Path
 
 
 project_root = Path(SPECPATH).resolve()
+
+with (project_root / "pyproject.toml").open("rb") as pyproject_file:
+    app_version = tomllib.load(pyproject_file)["project"]["version"]
+
 icon = project_root / (
     "packaging/spineworks.icns"
     if sys.platform == "darwin"
     else "src/spineworks/assets/spineworks.png"
 )
+
+
 
 a = Analysis(
     ["src/spineworks/__main__.py"],
@@ -55,4 +62,8 @@ if sys.platform == "darwin":
         name="SPINEWORKS.app",
         icon=str(icon),
         bundle_identifier="pl.aborzym.spineworks",
+        info_plist={
+            "CFBundleShortVersionString": app_version,
+            "CFBundleVersion": app_version,
+        },
     )
