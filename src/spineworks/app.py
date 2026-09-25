@@ -11,6 +11,7 @@ from PySide6.QtGui import (
     QIcon,
     QKeySequence,
     QPainter,
+    QPen,
     QPixmap,
 )
 from PySide6.QtWidgets import (
@@ -36,8 +37,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
-    QStyle,
-    QStyleOptionButton,
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
@@ -1033,18 +1032,19 @@ class MainWindow(QMainWindow):
         pixmap = QPixmap(size)
         pixmap.fill(Qt.GlobalColor.transparent)
 
-        option = QStyleOptionButton()
-        option.rect = pixmap.rect()
-        option.state = QStyle.StateFlag.State_Enabled
-        option.state |= QStyle.StateFlag.State_On if checked else QStyle.StateFlag.State_Off
-
         painter = QPainter(pixmap)
-        self.style().drawControl(
-            QStyle.ControlElement.CE_CheckBox,
-            option,
-            painter,
-            self,
-        )
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        box = pixmap.rect().adjusted(2, 2, -2, -2)
+        painter.setPen(QPen(QColor("#63d297"), 1.5))
+        painter.setBrush(QColor("#168653") if checked else QColor("#18271e"))
+        painter.drawRoundedRect(box, 3, 3)
+
+        if checked:
+            painter.setPen(QPen(QColor("#f2fff7"), 2.0))
+            painter.drawLine(5, 9, 8, 12)
+            painter.drawLine(8, 12, 14, 5)
+
         painter.end()
         return QIcon(pixmap)
 
