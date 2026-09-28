@@ -1,19 +1,23 @@
+import json
+import os
 import sys
 from itertools import pairwise
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QSettings, QSize, Qt, QTimer, QUrl, QUrlQuery
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QColor,
+    QDesktopServices,
     QIcon,
     QKeySequence,
     QPainter,
     QPen,
     QPixmap,
 )
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -46,6 +50,7 @@ from PySide6.QtWidgets import (
 
 from spineworks import __version__
 from spineworks.filters import (
+    HumdrumToolError,
     insert_spine,
     remove_spine,
     remove_system_breaks,
@@ -53,6 +58,9 @@ from spineworks.filters import (
     run_barnum,
 )
 from spineworks.humdrum import HumdrumDocument, HumdrumError
+
+FORMSPREE_REPORT_URL = "https://formspree.io/f/meaopdyj"
+GITHUB_ISSUE_URL = "https://github.com/aborzym/KRN-TOOLS/issues/new"
 
 
 class MainWindow(QMainWindow):
@@ -75,6 +83,13 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        self.settings = QSettings()
+        self.report_network_manager = QNetworkAccessManager(self)
+        self.environment_humdrum_paths = [
+            path for path in os.environ.get("SPINEWORKS_HUMDRUM_PATH", "").split(os.pathsep) if path
+        ]
+        self.humdrum_tool_paths: list[str] = []
+        self._load_humdrum_tool_paths()
         self.document: HumdrumDocument | None = None
         self.current_path: Path | None = None
         self.saved_text: str | None = None
@@ -90,6 +105,80 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_theme()
         QTimer.singleShot(0, self._load_test_file)
+
+    def _load_humdrum_tool_paths(self) -> None:
+        stored_paths = self.settings.value("humdrum/tool_paths", [])
+        if isinstance(stored_paths, str):
+            stored_paths = [stored_paths]
+
+        self.humdrum_tool_paths = [str(path) for path in stored_paths if str(path).strip()]
+        self._apply_humdrum_tool_paths()
+
+    def _apply_humdrum_tool_paths(self) -> None:
+        paths = dict.fromkeys([*self.humdrum_tool_paths, *self.environment_humdrum_paths])
+        if paths:
+            os.environ["SPINEWORKS_HUMDRUM_PATH"] = os.pathsep.join(paths)
+        else:
+            os.environ.pop("SPINEWORKS_HUMDRUM_PATH", None)
+
+    def configure_humdrum_tool_paths(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Narzędzia Humdrum")
+        dialog.resize(620, 360)
+
+        layout = QVBoxLayout(dialog)
+        description = QLabel(
+            "Podaj katalogi zawierające programy Humdrum — po jednym w każdym wierszu.\n"
+            "Standardowe lokalizacje są przeszukiwane automatycznie."
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        paths_editor = QPlainTextEdit(dialog)
+        paths_editor.setPlainText("\n".join(self.humdrum_tool_paths))
+        paths_editor.setPlaceholderText("/usr/local/humlib/bin\n/usr/local/humdrum/bin")
+        layout.addWidget(paths_editor, 1)
+
+        add_directory_button = QPushButton("Dodaj katalog…", dialog)
+
+        def add_directory() -> None:
+            directory = QFileDialog.getExistingDirectory(
+                dialog,
+                "Wybierz katalog z narzędziami Humdrum",
+            )
+            if not directory:
+                return
+
+            paths = [
+                line.strip() for line in paths_editor.toPlainText().splitlines() if line.strip()
+            ]
+            if directory not in paths:
+                paths.append(directory)
+                paths_editor.setPlainText("\n".join(paths))
+
+        add_directory_button.clicked.connect(add_directory)
+        layout.addWidget(add_directory_button)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self.humdrum_tool_paths = list(
+            dict.fromkeys(
+                line.strip() for line in paths_editor.toPlainText().splitlines() if line.strip()
+            )
+        )
+        self.settings.setValue("humdrum/tool_paths", self.humdrum_tool_paths)
+        self.settings.sync()
+        self._apply_humdrum_tool_paths()
+        self.statusBar().showMessage("Zapisano katalogi narzędzi Humdrum")
 
     def _build_ui(self) -> None:
         toolbar = QToolBar("Plik", self)
@@ -119,6 +208,11 @@ class MainWindow(QMainWindow):
         self.undo_action.triggered.connect(self.undo)
         toolbar.addAction(self.undo_action)
 
+        toolbar.addSeparator()
+
+        humdrum_tools_action = QAction("Narzędzia Humdrum…", self)
+        humdrum_tools_action.triggered.connect(self.configure_humdrum_tool_paths)
+        toolbar.addAction(humdrum_tools_action)
         central = QWidget(self)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(20, 18, 20, 20)
@@ -479,6 +573,148 @@ class MainWindow(QMainWindow):
         dialog.resize(760, 320)
         dialog.exec()
 
+    def _show_filter_error(self, title: str, error: HumdrumError) -> None:
+        if isinstance(error, HumdrumToolError):
+            self._show_tool_error(title, error)
+            return
+
+        QMessageBox.warning(self, title, str(error))
+
+    def _show_tool_error(self, title: str, error: HumdrumToolError) -> None:
+        report = error.diagnostic_report
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(820, 480)
+
+        layout = QVBoxLayout(dialog)
+
+        description = QLabel(str(error), dialog)
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        privacy_note = QLabel(
+            "Raport nie zawiera treści dokumentu .krn. Przed wysłaniem możesz "
+            "przejrzeć całą jego zawartość.",
+            dialog,
+        )
+        privacy_note.setWordWrap(True)
+        layout.addWidget(privacy_note)
+
+        report_box = QPlainTextEdit(dialog)
+        report_box.setPlainText(report)
+        report_box.setReadOnly(True)
+        report_box.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(report_box, 1)
+
+        buttons = QDialogButtonBox(dialog)
+        send_button = buttons.addButton(
+            "Wyślij raport",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        github_button = buttons.addButton(
+            "Zgłoś na GitHubie",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        copy_button = buttons.addButton(
+            "Kopiuj raport",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        ok_button = buttons.addButton(
+            "OK",
+            QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+
+        send_button.clicked.connect(lambda: self._send_diagnostic_report(report, dialog))
+        github_button.clicked.connect(lambda: self._open_github_issue(report))
+        copy_button.clicked.connect(lambda: QApplication.clipboard().setText(report))
+        ok_button.clicked.connect(dialog.accept)
+
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    def _send_diagnostic_report(self, report: str, parent: QWidget) -> None:
+        confirmation = QMessageBox.question(
+            parent,
+            "Wysłać raport?",
+            "Raport zostanie przesłany do autora SPINEWORKS przez usługę Formspree. "
+            "Nie zawiera treści dokumentu .krn.\n\nCzy wysłać raport?",
+        )
+        if confirmation != QMessageBox.StandardButton.Yes:
+            return
+
+        payload = json.dumps(
+            {
+                "_subject": f"SPINEWORKS {__version__} — raport błędu",
+                "message": report,
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        request = QNetworkRequest(QUrl(FORMSPREE_REPORT_URL))
+        request.setHeader(
+            QNetworkRequest.KnownHeaders.ContentTypeHeader,
+            "application/json",
+        )
+        request.setRawHeader(b"Accept", b"application/json")
+
+        reply = self.report_network_manager.post(request, payload)
+        self.statusBar().showMessage("Wysyłanie raportu błędu…")
+        reply.finished.connect(lambda: self._finish_diagnostic_report_submission(reply, parent))
+
+    def _finish_diagnostic_report_submission(
+        self,
+        reply: QNetworkReply,
+        parent: QWidget,
+    ) -> None:
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        response = bytes(reply.readAll()).decode("utf-8", errors="replace")
+
+        if (
+            reply.error() == QNetworkReply.NetworkError.NoError
+            and status is not None
+            and 200 <= int(status) < 300
+        ):
+            self.statusBar().showMessage("Wysłano raport błędu")
+            QMessageBox.information(
+                parent,
+                "Raport wysłany",
+                "Raport został wysłany. Dziękuję za zgłoszenie.",
+            )
+        else:
+            self.statusBar().showMessage("Nie udało się wysłać raportu")
+            QMessageBox.warning(
+                parent,
+                "Nie udało się wysłać raportu",
+                "Formspree nie przyjęło raportu.\n\n"
+                f"Kod HTTP: {status or 'brak'}\n"
+                f"{response or reply.errorString()}\n\n"
+                "Możesz skopiować raport albo zgłosić problem na GitHubie.",
+            )
+
+        reply.deleteLater()
+
+    def _open_github_issue(self, report: str) -> None:
+        query = QUrlQuery()
+        query.addQueryItem(
+            "title",
+            f"Raport błędu SPINEWORKS {__version__}",
+        )
+        query.addQueryItem(
+            "body",
+            f"## Raport diagnostyczny\n\n```text\n{report}\n```\n",
+        )
+
+        url = QUrl(GITHUB_ISSUE_URL)
+        url.setQuery(query)
+        if not QDesktopServices.openUrl(url):
+            QApplication.clipboard().setText(report)
+            QMessageBox.warning(
+                self,
+                "Nie można otworzyć przeglądarki",
+                "Nie udało się otworzyć GitHuba. Raport został skopiowany do schowka.",
+            )
+
     def apply_text_italics(self) -> None:
         if self.document is None:
             return
@@ -738,10 +974,35 @@ class MainWindow(QMainWindow):
             return
         if not self.apply_instrument_codes(show_unchanged_status=False):
             return
+        instrument_codes = self.document.instrument_codes()
+        kern_codes = [
+            code
+            for spine_type, code in zip(
+                self.document.spine_types,
+                instrument_codes,
+                strict=True,
+            )
+            if spine_type == "**kern"
+        ]
+
+        if kern_codes and all(code == "*" for code in kern_codes):
+            QMessageBox.information(
+                self,
+                "Brak kodów instrumentów",
+                "Dokument nie zawiera żadnego kodu instrumentu w spine’ach **kern.\n\n"
+                "Filtr addic nie został uruchomiony. Uzupełnij najpierw wiersz "
+                "„Kod instrumentu”.",
+            )
+            return
+
         missing = [
             str(column + 1)
             for column, (spine_type, code) in enumerate(
-                zip(self.document.spine_types, self.document.instrument_codes(), strict=True)
+                zip(
+                    self.document.spine_types,
+                    instrument_codes,
+                    strict=True,
+                )
             )
             if spine_type == "**kern" and code == "*"
         ]
@@ -760,7 +1021,7 @@ class MainWindow(QMainWindow):
         try:
             self.document = run_addic(self.document)
         except HumdrumError as error:
-            QMessageBox.warning(self, "Nie można uruchomić addic", str(error))
+            self._show_filter_error("Nie można uruchomić addic", error)
             return
         self.undo_texts.append(before)
         self.undo_action.setEnabled(True)
@@ -776,7 +1037,7 @@ class MainWindow(QMainWindow):
         try:
             filtered = run_barnum(self.document)
         except HumdrumError as error:
-            QMessageBox.warning(self, "Nie można uruchomić barnum", str(error))
+            self._show_filter_error("Nie można uruchomić barnum", error)
             return
         if filtered.to_text() == before:
             self.statusBar().showMessage("Numery taktów są już prawidłowe")
@@ -796,7 +1057,7 @@ class MainWindow(QMainWindow):
         try:
             filtered = remove_system_breaks(self.document)
         except HumdrumError as error:
-            QMessageBox.warning(self, "Nie można usunąć łamań systemów", str(error))
+            self._show_filter_error("Nie można usunąć łamań systemów", error)
             return
         if filtered.to_text() == before:
             self.statusBar().showMessage("Dokument nie zawiera łamań systemów")
@@ -841,7 +1102,7 @@ class MainWindow(QMainWindow):
         try:
             filtered = remove_spine(self.document, column=column)
         except HumdrumError as error:
-            QMessageBox.warning(self, "Nie można usunąć spine’u", str(error))
+            self._show_filter_error("Nie można usunąć spine’u", error)
             return
         self.document = filtered
         self.undo_texts.append(before)
@@ -877,7 +1138,7 @@ class MainWindow(QMainWindow):
                 hidden_rests=hidden_rests,
             )
         except HumdrumError as error:
-            QMessageBox.warning(self, "Nie można dodać spine’u", str(error))
+            self._show_filter_error("Nie można dodać spine’u", error)
             return
         self.document = filtered
         self.undo_texts.append(before)
@@ -1347,6 +1608,8 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setOrganizationName("aborzym")
+    app.setApplicationName("SPINEWORKS")
     icon_path = Path(__file__).with_name("assets") / "spineworks.png"
     app.setWindowIcon(QIcon(str(icon_path)))
     app.setStyle("Fusion")
