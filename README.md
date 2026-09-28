@@ -59,7 +59,11 @@ lokalizacjach, między innymi:
 /usr/local/bin
 ```
 
-Niestandardowy katalog można wskazać w zmiennej środowiskowej
+SPINEWORKS automatycznie przeszukuje typowe katalogi instalacji Humdrum.
+Dodatkowe katalogi można wskazać w aplikacji przez „Narzędzia Humdrum…”.
+Ustawienia są zapamiętywane między uruchomieniami.
+
+Alternatywnie można użyć zmiennej środowiskowej
 `SPINEWORKS_HUMDRUM_PATH`. Można w niej podać kilka katalogów rozdzielonych
 dwukropkiem na Linuksie i macOS.
 
@@ -100,9 +104,14 @@ pyinstaller --noconfirm --clean SPINEWORKS.spec
 
 ## Pakiety instalacyjne
 
-Wydanie 2.0.0 jest przygotowywane dla następujących platform:
+Wydanie 2.1.1 jest przygotowywane dla następujących platform:
 
-- Linux `x86_64` — `SPINEWORKS-2.0.0-linux-x86_64.deb`;
-- macOS Apple Silicon `arm64` — `SPINEWORKS-2.0.0-macos-arm64.dmg`.
+- Linux `x86_64` — `SPINEWORKS-2.1.1-linux-x86_64.deb`;
+- macOS Apple Silicon `arm64` — `SPINEWORKS-2.1.1-macos-arm64.dmg`.
 
 Wersja dla macOS Intel `x86_64` zostanie dodana oddzielnie.
+
+W przypadku błędu zewnętrznego narzędzia aplikacja może przygotować raport
+diagnostyczny. Raport nie zawiera treści dokumentu `.krn`. Użytkownik może
+świadomie wysłać go autorowi przez Formspree, skopiować do schowka albo otworzyć
+gotowe zgłoszenie w GitHub Issues.
