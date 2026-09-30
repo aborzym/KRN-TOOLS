@@ -955,6 +955,245 @@ class HumdrumDocument:
         self.header = self._find_header()
         return True
 
+    def right_align_dynamics(
+        self,
+        *,
+        start_measure: int | None,
+        end_measure: int | None,
+        kern_columns: set[int],
+    ) -> int:
+        if start_measure is not None and end_measure is not None and start_measure > end_measure:
+            raise HumdrumError("Pierwszy takt zakresu nie może być późniejszy niż ostatni.")
+
+        initial_types = self.spine_types.copy()
+        selected_kerns = {
+            column
+            for column in kern_columns
+            if 0 <= column < len(initial_types) and initial_types[column] == "**kern"
+        }
+        if not selected_kerns:
+            raise HumdrumError("Nie wybrano żadnego spine’u **kern.")
+
+        if self.header.staff_line is not None:
+            initial_staffs = self.fields(self.header.staff_line)
+        else:
+            initial_staffs = [""] * len(initial_types)
+
+        active_spines: list[tuple[str, bool]] = []
+        nearest_kern: int | None = None
+
+        for column, spine_type in enumerate(initial_types):
+            if spine_type == "**kern":
+                nearest_kern = column
+                active_spines.append((spine_type, False))
+                continue
+
+            selected_dynamic = False
+            if spine_type == "**dynam":
+                staff = initial_staffs[column] if column < len(initial_staffs) else ""
+                related_kerns = {
+                    kern_column
+                    for kern_column, kern_type in enumerate(initial_types)
+                    if kern_type == "**kern"
+                    and staff.startswith("*staff")
+                    and kern_column < len(initial_staffs)
+                    and initial_staffs[kern_column] == staff
+                }
+
+                if related_kerns:
+                    selected_dynamic = bool(related_kerns & selected_kerns)
+                elif nearest_kern is not None:
+                    selected_dynamic = nearest_kern in selected_kerns
+
+            active_spines.append((spine_type, selected_dynamic))
+
+        current_measure = 0
+        local_comment_lines: list[int] = []
+        updates: dict[int, list[str]] = {}
+        insertions: dict[int, list[str]] = {}
+        changed_count = 0
+
+        for line_number in range(
+            self.header.exclusive_line + 1,
+            len(self.lines),
+        ):
+            line = self.lines[line_number]
+
+            if line.startswith("!!") or not line:
+                local_comment_lines.clear()
+                continue
+
+            fields = line.split("\t")
+            if len(fields) != len(active_spines):
+                raise HumdrumError(
+                    f"Nieprawidłowa liczba spine’ów — linia {line_number + 1}: {line}"
+                )
+
+            if line.startswith("="):
+                local_comment_lines.clear()
+                numbered_barline = next(
+                    (match for token in fields if (match := re.match(r"^=+(\d+)", token))),
+                    None,
+                )
+                if numbered_barline is not None:
+                    current_measure = int(numbered_barline.group(1))
+                continue
+
+            if line.startswith("*"):
+                local_comment_lines.clear()
+
+                if any(token in {"*x", "*+"} for token in fields):
+                    bad_token = next(token for token in fields if token in {"*x", "*+"})
+                    raise HumdrumError(
+                        f"Nieobsługiwany manipulator spine’u — linia {line_number + 1}: {bad_token}"
+                    )
+
+                next_spines: list[tuple[str, bool]] = []
+                column = 0
+
+                while column < len(fields):
+                    token = fields[column]
+                    spine_type, selected_dynamic = active_spines[column]
+
+                    if token == "*^":
+                        next_spines.append((spine_type, selected_dynamic))
+                        next_spines.append((spine_type, selected_dynamic))
+                        column += 1
+                        continue
+
+                    if token == "*v":
+                        merge_end = column
+                        while merge_end < len(fields) and fields[merge_end] == "*v":
+                            merge_end += 1
+
+                        if merge_end - column < 2:
+                            raise HumdrumError(
+                                f"Nieprawidłowe scalenie spine’ów — linia {line_number + 1}: {line}"
+                            )
+
+                        merged_spines = active_spines[column:merge_end]
+                        merged_type = merged_spines[0][0]
+                        if any(
+                            candidate_type != merged_type
+                            for candidate_type, _selected in merged_spines
+                        ):
+                            raise HumdrumError(
+                                f"Scalenie spine’ów różnych typów — linia {line_number + 1}: {line}"
+                            )
+
+                        next_spines.append(
+                            (
+                                merged_type,
+                                any(selected for _candidate_type, selected in merged_spines),
+                            )
+                        )
+                        column = merge_end
+                        continue
+
+                    if token == "*-":
+                        column += 1
+                        continue
+
+                    next_spines.append((spine_type, selected_dynamic))
+                    column += 1
+
+                active_spines = next_spines
+                continue
+
+            if line.startswith("!"):
+                local_comment_lines.append(line_number)
+                continue
+
+            in_measure_range = (start_measure is None or current_measure >= start_measure) and (
+                end_measure is None or current_measure <= end_measure
+            )
+
+            if not in_measure_range:
+                local_comment_lines.clear()
+                continue
+
+            target_columns = [
+                column
+                for column, (spine_type, selected_dynamic) in enumerate(active_spines)
+                if (
+                    spine_type == "**dynam"
+                    and selected_dynamic
+                    and fields[column] not in {"", "."}
+                    and not fields[column].startswith(("<", ">", "(", ")", "[", "]"))
+                )
+            ]
+
+            insertion_fields: list[str] | None = None
+
+            for column in target_columns:
+                existing_layout_found = False
+
+                for comment_line in reversed(local_comment_lines):
+                    comment_fields = updates.setdefault(
+                        comment_line,
+                        self.fields(comment_line).copy(),
+                    )
+                    comment = comment_fields[column]
+
+                    if not (comment == "!LO:DY" or comment.startswith("!LO:DY:")):
+                        continue
+
+                    existing_layout_found = True
+                    parameters = comment.split(":")[2:]
+                    if "rj" not in parameters:
+                        comment_fields[column] = comment.replace(
+                            "!LO:DY",
+                            "!LO:DY:rj",
+                            1,
+                        )
+                        changed_count += 1
+                    break
+
+                if existing_layout_found:
+                    continue
+
+                empty_comment_line = next(
+                    (
+                        comment_line
+                        for comment_line in reversed(local_comment_lines)
+                        if updates.setdefault(
+                            comment_line,
+                            self.fields(comment_line).copy(),
+                        )[column]
+                        == "!"
+                    ),
+                    None,
+                )
+
+                if empty_comment_line is not None:
+                    updates[empty_comment_line][column] = "!LO:DY:rj"
+                    changed_count += 1
+                    continue
+
+                if insertion_fields is None:
+                    insertion_fields = ["!"] * len(active_spines)
+                    insertions[line_number] = insertion_fields
+
+                insertion_fields[column] = "!LO:DY:rj"
+                changed_count += 1
+
+            local_comment_lines.clear()
+
+        if changed_count == 0:
+            return 0
+
+        for line_number, fields in updates.items():
+            self.lines[line_number] = "\t".join(fields)
+
+        for line_number, fields in sorted(
+            insertions.items(),
+            reverse=True,
+        ):
+            self.lines.insert(line_number, "\t".join(fields))
+
+        self.header = self._find_header()
+        return changed_count
+
     def to_text(self) -> str:
         text = "\n".join(self.lines)
         return text + ("\n" if self.trailing_newline else "")

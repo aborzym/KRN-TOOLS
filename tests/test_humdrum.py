@@ -675,3 +675,132 @@ def test_edits_existing_instrument_classes() -> None:
     assert document.set_instrument_classes(["vox", "pomijane", "klav"]) is True
     assert document.lines[2] == "*ICvox\t*\t*ICklav"
     assert document.set_instrument_classes(["vox", "", "klav"]) is False
+
+
+def test_right_aligns_dynamics_in_selected_measure_and_kern() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\t**dynam\n"
+        "*staff2\t*staff2\t*staff1\t*staff1\n"
+        "=1\t=1\t=1\t=1\n"
+        "4c\tp\t4e\tpp\n"
+        "=2\t=2\t=2\t=2\n"
+        "!\t!\t!\t!LO:DY:Y=20\n"
+        "4d\tf\t4f\tmf\n"
+        "!\t!LO:DY:a:B\t!\t!\n"
+        "4e\tsfz\t4g\t>\n"
+        "4f\tpp\t4a\t.\n"
+        "4g\t<\t4b\tp\n"
+        "=3\t=3\t=3\t=3\n"
+        "4a\tff\t4c\tp\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+
+    assert (
+        document.right_align_dynamics(
+            start_measure=2,
+            end_measure=2,
+            kern_columns={0},
+        )
+        == 3
+    )
+    assert document.lines == [
+        "**kern\t**dynam\t**kern\t**dynam",
+        "*staff2\t*staff2\t*staff1\t*staff1",
+        "=1\t=1\t=1\t=1",
+        "4c\tp\t4e\tpp",
+        "=2\t=2\t=2\t=2",
+        "!\t!LO:DY:rj\t!\t!LO:DY:Y=20",
+        "4d\tf\t4f\tmf",
+        "!\t!LO:DY:rj:a:B\t!\t!",
+        "4e\tsfz\t4g\t>",
+        "!\t!LO:DY:rj\t!\t!",
+        "4f\tpp\t4a\t.",
+        "4g\t<\t4b\tp",
+        "=3\t=3\t=3\t=3",
+        "4a\tff\t4c\tp",
+        "*-\t*-\t*-\t*-",
+    ]
+
+
+def test_right_aligns_dynamics_from_measure_to_end_without_staff_row() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\t**dynam\n"
+        "=1\t=1\t=1\t=1\n"
+        "4c\tp\t4e\tpp\n"
+        "=2\t=2\t=2\t=2\n"
+        "4d\tf\t4f\tmf\n"
+        "=3\t=3\t=3\t=3\n"
+        "4e\tff\t4g\tsfz\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+
+    assert (
+        document.right_align_dynamics(
+            start_measure=2,
+            end_measure=None,
+            kern_columns={2},
+        )
+        == 2
+    )
+    assert document.lines == [
+        "**kern\t**dynam\t**kern\t**dynam",
+        "=1\t=1\t=1\t=1",
+        "4c\tp\t4e\tpp",
+        "=2\t=2\t=2\t=2",
+        "!\t!\t!\t!LO:DY:rj",
+        "4d\tf\t4f\tmf",
+        "=3\t=3\t=3\t=3",
+        "!\t!\t!\t!LO:DY:rj",
+        "4e\tff\t4g\tsfz",
+        "*-\t*-\t*-\t*-",
+    ]
+
+
+def test_does_not_duplicate_right_alignment_or_modify_hairpins() -> None:
+    source = (
+        "**kern\t**dynam\n"
+        "=1\t=1\n"
+        "!\t!LO:DY:rj:Y=10\n"
+        "4c\tp\n"
+        "4d\t<\n"
+        "4e\t(\n"
+        "4f\t[\n"
+        "4g\t>\n"
+        "4a\t)\n"
+        "4b\t]\n"
+        "*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    assert (
+        document.right_align_dynamics(
+            start_measure=None,
+            end_measure=None,
+            kern_columns={0},
+        )
+        == 0
+    )
+    assert document.to_text() == source
+
+
+def test_right_aligns_dynamics_shared_by_selected_kern() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\t**dynam\n*staff1\t*staff1\t*staff1\n=1\t=1\t=1\n4c\t4e\tf\n*-\t*-\t*-\n"
+    )
+
+    assert (
+        document.right_align_dynamics(
+            start_measure=None,
+            end_measure=None,
+            kern_columns={0},
+        )
+        == 1
+    )
+    assert document.lines == [
+        "**kern\t**kern\t**dynam",
+        "*staff1\t*staff1\t*staff1",
+        "=1\t=1\t=1",
+        "!\t!\t!LO:DY:rj",
+        "4c\t4e\tf",
+        "*-\t*-\t*-",
+    ]
