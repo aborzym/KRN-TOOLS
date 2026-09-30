@@ -308,6 +308,11 @@ class MainWindow(QMainWindow):
         self.hide_range_button.setEnabled(False)
         self.hide_range_button.clicked.connect(self.apply_hidden_measure_range)
 
+        self.right_align_dynamics_button = QPushButton("Dynamika do prawej")
+        self.right_align_dynamics_button.setObjectName("primaryButton")
+        self.right_align_dynamics_button.setEnabled(False)
+        self.right_align_dynamics_button.clicked.connect(self.apply_right_align_dynamics)
+
         self.breaks_button = QPushButton("Usuń łamania")
         self.breaks_button.setObjectName("dangerButton")
         self.breaks_button.setEnabled(False)
@@ -346,6 +351,12 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Fixed,
         )
         operations.addWidget(self.hide_range_button, 1, 3)
+
+        self.right_align_dynamics_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        operations.addWidget(self.right_align_dynamics_button, 1, 4)
 
         for column, button in enumerate((self.breaks_button, self.remove_spine_button)):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -408,6 +419,10 @@ class MainWindow(QMainWindow):
         self.custos_button.setEnabled(True)
         self.hide_range_button.setEnabled(
             any(spine_type == "**kern" for spine_type in document.spine_types)
+        )
+        self.right_align_dynamics_button.setEnabled(
+            any(spine_type == "**kern" for spine_type in document.spine_types)
+            and any(spine_type == "**dynam" for spine_type in document.spine_types)
         )
         self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
@@ -884,6 +899,212 @@ class MainWindow(QMainWindow):
                 f"Brak danych do ukrycia w taktach {start_measure}–{end_measure}"
             )
 
+    def _ask_right_align_dynamics(
+        self,
+    ) -> tuple[int | None, int | None, set[int]] | None:
+        if self.document is None:
+            return None
+
+        kern_columns = [
+            column
+            for column, spine_type in enumerate(self.document.spine_types)
+            if spine_type == "**kern"
+        ]
+        if not kern_columns:
+            return None
+
+        descriptions = self._spine_descriptions()
+        part_groups: dict[int, set[int]] = {}
+
+        if self.document.header.part_line is not None:
+            part_fields = self.document.fields(self.document.header.part_line)
+            for column in kern_columns:
+                token = part_fields[column]
+                number = token.removeprefix("*part")
+                if token.startswith("*part") and number.isdigit():
+                    part_groups.setdefault(int(number), set()).add(column)
+
+        part_options: list[tuple[str, set[int]]] = []
+
+        if part_groups:
+            for part_number in sorted(part_groups):
+                columns = part_groups[part_number]
+                names = list(
+                    dict.fromkeys(
+                        descriptions[column].rsplit(" — ", 1)[-1] for column in sorted(columns)
+                    )
+                )
+                part_options.append(
+                    (
+                        f"{part_number} — {' / '.join(names)}",
+                        columns,
+                    )
+                )
+
+            grouped_columns = set().union(*(columns for _label, columns in part_options))
+            for column in kern_columns:
+                if column in grouped_columns:
+                    continue
+                name = descriptions[column].rsplit(" — ", 1)[-1]
+                part_options.append((f"? — {name}", {column}))
+        else:
+            for part_number, column in enumerate(
+                reversed(kern_columns),
+                start=1,
+            ):
+                name = descriptions[column].rsplit(" — ", 1)[-1]
+                part_options.append((f"{part_number} — {name}", {column}))
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Dynamika do prawej")
+        dialog.setMinimumWidth(520)
+        form = QFormLayout(dialog)
+
+        all_measures_checkbox = QCheckBox("Wszystkie takty", dialog)
+        all_measures_checkbox.setChecked(True)
+        form.addRow(all_measures_checkbox)
+
+        measure_input_width = 150
+
+        start_measure_input = QSpinBox(dialog)
+        start_measure_input.setRange(0, 999_999)
+        start_measure_input.setValue(1)
+        start_measure_input.setFixedWidth(measure_input_width)
+        form.addRow("Od taktu:", start_measure_input)
+
+        end_measure_widget = QWidget(dialog)
+        end_measure_layout = QHBoxLayout(end_measure_widget)
+        end_measure_layout.setContentsMargins(0, 0, 0, 0)
+
+        end_measure_input = QSpinBox(end_measure_widget)
+        end_measure_input.setRange(0, 999_999)
+        end_measure_input.setValue(1)
+        end_measure_input.setFixedWidth(measure_input_width)
+
+        to_end_checkbox = QCheckBox("Do końca", end_measure_widget)
+        to_end_checkbox.setChecked(False)
+
+        end_measure_layout.addWidget(end_measure_input)
+        end_measure_layout.addWidget(to_end_checkbox)
+        end_measure_layout.addStretch(1)
+        form.addRow("Do taktu:", end_measure_widget)
+
+        all_spines_checkbox = QCheckBox("Wszystkie spiny", dialog)
+        all_spines_checkbox.setChecked(True)
+        form.addRow(all_spines_checkbox)
+
+        start_spine_combo = QComboBox(dialog)
+        end_spine_combo = QComboBox(dialog)
+
+        for label, _columns in part_options:
+            start_spine_combo.addItem(label)
+            end_spine_combo.addItem(label)
+
+        end_spine_combo.setCurrentIndex(end_spine_combo.count() - 1)
+        form.addRow("Od spinu:", start_spine_combo)
+        form.addRow("Do spinu:", end_spine_combo)
+
+        def sync_measure_inputs() -> None:
+            range_enabled = not all_measures_checkbox.isChecked()
+            start_measure_input.setEnabled(range_enabled)
+            to_end_checkbox.setEnabled(range_enabled)
+            end_measure_input.setEnabled(range_enabled and not to_end_checkbox.isChecked())
+
+        def sync_spine_inputs() -> None:
+            range_enabled = not all_spines_checkbox.isChecked()
+            start_spine_combo.setEnabled(range_enabled)
+            end_spine_combo.setEnabled(range_enabled)
+
+        all_measures_checkbox.toggled.connect(sync_measure_inputs)
+        to_end_checkbox.toggled.connect(sync_measure_inputs)
+        all_spines_checkbox.toggled.connect(sync_spine_inputs)
+        sync_measure_inputs()
+        sync_spine_inputs()
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Przesuń")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        while dialog.exec() == QDialog.DialogCode.Accepted:
+            if all_measures_checkbox.isChecked():
+                start_measure = None
+                end_measure = None
+            else:
+                start_measure = start_measure_input.value()
+                end_measure = None if to_end_checkbox.isChecked() else end_measure_input.value()
+
+            if (
+                start_measure is not None
+                and end_measure is not None
+                and start_measure > end_measure
+            ):
+                QMessageBox.warning(
+                    dialog,
+                    "Nieprawidłowy zakres taktów",
+                    "Pierwszy takt nie może być późniejszy niż ostatni.",
+                )
+                continue
+
+            if all_spines_checkbox.isChecked():
+                selected_columns = set(kern_columns)
+            else:
+                start_index = start_spine_combo.currentIndex()
+                end_index = end_spine_combo.currentIndex()
+
+                if start_index > end_index:
+                    QMessageBox.warning(
+                        dialog,
+                        "Nieprawidłowy zakres spinów",
+                        "Pierwszy spin nie może znajdować się za ostatnim.",
+                    )
+                    continue
+
+                selected_columns = set().union(
+                    *(columns for _label, columns in part_options[start_index : end_index + 1])
+                )
+
+            return start_measure, end_measure, selected_columns
+
+        return None
+
+    def apply_right_align_dynamics(self) -> None:
+        if self.document is None:
+            return
+
+        choice = self._ask_right_align_dynamics()
+        if choice is None:
+            return
+
+        start_measure, end_measure, selected_columns = choice
+        before = self.document.to_text()
+
+        try:
+            changed_count = self.document.right_align_dynamics(
+                start_measure=start_measure,
+                end_measure=end_measure,
+                kern_columns=selected_columns,
+            )
+        except HumdrumError as error:
+            self._show_copyable_error(
+                "Nie można przesunąć dynamiki",
+                str(error),
+            )
+            return
+
+        if changed_count:
+            self.undo_texts.append(before)
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self.statusBar().showMessage(f"Liczba przesuniętych oznaczeń dynamiki: {changed_count}")
+        else:
+            self.statusBar().showMessage("Nie znaleziono dynamiki wymagającej przesunięcia")
+
     def apply_custos(self) -> None:
         if self.document is None:
             return
@@ -1316,6 +1537,10 @@ class MainWindow(QMainWindow):
         self.field_edits_dirty = False
         self.undo_action.setEnabled(bool(self.undo_texts))
         self.remove_spine_button.setEnabled(self.document.spine_count > 1)
+        self.right_align_dynamics_button.setEnabled(
+            any(spine_type == "**kern" for spine_type in self.document.spine_types)
+            and any(spine_type == "**dynam" for spine_type in self.document.spine_types)
+        )
         self.system_decoration_input.blockSignals(True)
         self.system_decoration_input.setText(self.document.system_decoration())
         self.system_decoration_input.blockSignals(False)
@@ -1597,6 +1822,14 @@ class MainWindow(QMainWindow):
                 selection-background-color: #177245; padding: 3px 1px;
             }
             QLineEdit:disabled { color: #d8f8e4; }
+QSpinBox:disabled, QComboBox:disabled {
+    color: #718078;
+    background: #18211b;
+    border-color: #26372c;
+}
+QCheckBox:disabled {
+    color: #718078;
+}
             QStatusBar { background: #111a14; color: #9fb2a5; }
             QLabel#versionLabel {
                 background: transparent; color: #718078;
