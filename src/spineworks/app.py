@@ -59,6 +59,7 @@ from spineworks.filters import (
     run_barnum,
 )
 from spineworks.humdrum import HumdrumDocument, HumdrumError
+from spineworks.updater import UpdateManager
 
 FORMSPREE_REPORT_URL = "https://formspree.io/f/meaopdyj"
 GITHUB_ISSUE_URL = "https://github.com/aborzym/KRN-TOOLS/issues/new"
@@ -86,6 +87,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = QSettings()
         self.report_network_manager = QNetworkAccessManager(self)
+        self.update_manager = UpdateManager(
+            self,
+            settings=self.settings,
+            current_version=__version__,
+        )
         self.environment_humdrum_paths = [
             path for path in os.environ.get("SPINEWORKS_HUMDRUM_PATH", "").split(os.pathsep) if path
         ]
@@ -111,6 +117,10 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_theme()
         QTimer.singleShot(0, self._load_test_file)
+        QTimer.singleShot(
+            1500,
+            self.update_manager.check_for_updates,
+        )
 
     def _load_humdrum_tool_paths(self) -> None:
         stored_paths = self.settings.value("humdrum/tool_paths", [])
@@ -219,6 +229,15 @@ class MainWindow(QMainWindow):
         humdrum_tools_action = QAction("Narzędzia Humdrum…", self)
         humdrum_tools_action.triggered.connect(self.configure_humdrum_tool_paths)
         toolbar.addAction(humdrum_tools_action)
+
+        update_action = QAction("Sprawdź aktualizacje…", self)
+        update_action.triggered.connect(
+            lambda: self.update_manager.check_for_updates(
+                show_current_message=True,
+            )
+        )
+        toolbar.addAction(update_action)
+
         central = QWidget(self)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(20, 18, 20, 20)
