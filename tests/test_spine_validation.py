@@ -251,3 +251,29 @@ def test_allows_separate_closing_rows_and_final_termination() -> None:
 
     assert trace.issue is None
     assert find_split_issues(trace) == ()
+
+
+def test_detects_closing_left_instrument_before_right_instrument() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n*^\t*^\n1c\t1e\t1g\t1b\n*v\t*v\t*\t*\n*\t*v\t*v\n=2\t=2\n*-\t*-\n"
+    )
+
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+
+    assert trace.issue is None
+    assert len(issues) == 1
+    assert issues[0].code == "merge_order"
+    assert issues[0].line_number == 6
+    assert issues[0].related_lines == (5,)
+
+
+def test_allows_nested_closings_of_same_root_spine() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n=1\n*^\n*\t*^\n1c\t1e\t1g\n*\t*v\t*v\n*v\t*v\n=2\n*-\n"
+    )
+
+    trace = trace_spines(document)
+
+    assert trace.issue is None
+    assert find_split_issues(trace) == ()

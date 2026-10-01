@@ -270,11 +270,15 @@ def find_split_issues(trace: SpineTrace) -> tuple[SplitIssue, ...]:
 
     def check_measure(rows: list[TracedRecord], label: str | None) -> None:
         data_lines: list[int] = []
+        previous_merge_column: int | None = None
+        previous_merge_line: int | None = None
 
         for position, row in enumerate(rows):
             record = row.record
             if record.kind is RecordKind.DATA:
                 data_lines.append(record.line_number)
+                previous_merge_column = None
+                previous_merge_line = None
                 continue
 
             if record.kind is not RecordKind.INTERPRETATION:
@@ -306,6 +310,31 @@ def find_split_issues(trace: SpineTrace) -> tuple[SplitIssue, ...]:
                 continue
 
             identities = tuple(dict.fromkeys(closing_groups))
+
+            if len(closing_groups) == 1:
+                current_column = closing_groups[0].root_column
+
+                if previous_merge_column is not None and current_column > previous_merge_column:
+                    issues.append(
+                        SplitIssue(
+                            code="merge_order",
+                            line_number=record.line_number,
+                            measure=label,
+                            identities=identities,
+                            related_lines=(
+                                (previous_merge_line,) if previous_merge_line is not None else ()
+                            ),
+                            message="Scalenia powinny następować od prawej do lewej.",
+                        )
+                    )
+
+                previous_merge_column = current_column
+                previous_merge_line = record.line_number
+            else:
+                # First separate ambiguous multi-group closing rows.
+                previous_merge_column = None
+                previous_merge_line = None
+
             if len(closing_groups) > 1:
                 issues.append(
                     SplitIssue(
