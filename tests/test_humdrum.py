@@ -804,3 +804,99 @@ def test_right_aligns_dynamics_shared_by_selected_kern() -> None:
         "4c\t4e\tf",
         "*-\t*-\t*-",
     ]
+
+
+def test_colors_selected_notation_elements() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\t**dynam\n"
+        "*staff1\t*staff1\t*staff2\t*staff2\n"
+        "*clefG2\t*\t*clefG2\t*\n"
+        "=1\t=1\t=1\t=1\n"
+        "([4c#'\t<\t4e-^\tf\n"
+        "!LO:TX:t=solo\t!\t!\t!\n"
+        "*clefF4\t*\t*\t*\n"
+        "4d_~\tsfz\t4f\tp\n"
+        "=2\t=2\t=2\t=2\n"
+        "4e-\tff\t4g#\tpp\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+
+    assert (
+        document.color_notation_elements(
+            start_measure=1,
+            end_measure=1,
+            kern_columns={0},
+            color="blue",
+            elements={
+                "accidentals",
+                "articulations",
+                "hairpins",
+                "dynamics",
+                "clefs",
+                "ties",
+                "slurs",
+                "texts",
+            },
+        )
+        == 10
+    )
+    assert document.lines == [
+        "**kern\t**dynam\t**kern\t**dynam",
+        "*staff1\t*staff1\t*staff2\t*staff2",
+        "*clefG2\t*\t*clefG2\t*",
+        "=1\t=1\t=1\t=1",
+        "!LO:ACC:color=blue\t!LO:HP:color=blue\t!\t!",
+        "!LO:ART:color=blue\t!\t!\t!",
+        "!LO:T:color=blue\t!\t!\t!",
+        "!LO:S:color=blue\t!\t!\t!",
+        "([4c#'\t<\t4e-^\tf",
+        "!LO:TX:t=solo:color=blue\t!\t!\t!",
+        "!LO:CL:color=blue\t!\t!\t!",
+        "*clefF4\t*\t*\t*",
+        "!LO:ART:color=blue\t!LO:DY:color=blue\t!\t!",
+        "!LO:T:color=blue\t!\t!\t!",
+        "4d_~\tsfz\t4f\tp",
+        "=2\t=2\t=2\t=2",
+        "4e-\tff\t4g#\tpp",
+        "*-\t*-\t*-\t*-",
+    ]
+
+
+def test_extends_existing_color_layouts_without_overwriting_color() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\n"
+        "*staff1\t*staff1\n"
+        "=1\t=1\n"
+        "!LO:ACC:X=2\t!LO:HP:color=purple\n"
+        "!LO:ART:color=red\t!\n"
+        "([4c#'\t<\n"
+        "*-\t*-\n"
+    )
+
+    assert (
+        document.color_notation_elements(
+            start_measure=None,
+            end_measure=None,
+            kern_columns={0},
+            color="dodgerblue",
+            elements={
+                "accidentals",
+                "articulations",
+                "hairpins",
+                "ties",
+                "slurs",
+            },
+        )
+        == 3
+    )
+    assert document.lines == [
+        "**kern\t**dynam",
+        "*staff1\t*staff1",
+        "=1\t=1",
+        "!LO:ACC:X=2:color=dodgerblue\t!LO:HP:color=purple",
+        "!LO:ART:color=red\t!",
+        "!LO:T:color=dodgerblue\t!",
+        "!LO:S:color=dodgerblue\t!",
+        "([4c#'\t<",
+        "*-\t*-",
+    ]
