@@ -1209,6 +1209,326 @@ class HumdrumDocument:
         self.header = self._find_header()
         return changed_count
 
+    def compact_local_comment_records(self) -> bool:
+        return self._compact_record_blocks(record_kind="comments")
+
+    def compact_interpretation_records(self) -> bool:
+        changed = self._compact_record_blocks(record_kind="interpretations")
+        if changed:
+            self.header = self._find_header()
+        return changed
+
+    def _compact_record_blocks(self, *, record_kind: str) -> bool:
+        spine_manipulators = {"*^", "*v", "*x", "*+", "*-"}
+        changed = False
+        music_started = False
+        block: list[int] = []
+
+        def is_target_record(line: str) -> bool:
+            if record_kind == "comments":
+                return line.startswith("!") and not line.startswith("!!")
+
+            if record_kind == "interpretations":
+                return (
+                    line.startswith("*")
+                    and not line.startswith("**")
+                    and not any(token in spine_manipulators for token in line.split("\t"))
+                )
+
+            raise HumdrumError(f"Nieznany rodzaj rekordów: {record_kind}")
+
+        def compact_block() -> None:
+            nonlocal changed
+
+            if len(block) < 2:
+                block.clear()
+                return
+
+            rows = [self.lines[line_number].split("\t") for line_number in block]
+            width = len(rows[0])
+
+            if any(len(fields) != width for fields in rows):
+                first_line = block[0] + 1
+                last_line = block[-1] + 1
+                raise HumdrumError(
+                    "Niejednakowa liczba pól w porządkowanym bloku, "
+                    f"linie {first_line}–{last_line}."
+                )
+
+            if record_kind == "comments":
+                following_fields: list[str] | None = None
+                following_line_number = block[-1] + 1
+
+                if following_line_number < len(self.lines):
+                    following_line = self.lines[following_line_number]
+                    candidate_fields = following_line.split("\t")
+
+                    if (
+                        not following_line.startswith(("!", "*", "="))
+                        and len(candidate_fields) == width
+                    ):
+                        following_fields = candidate_fields
+
+                compacted_rows = self._compact_comment_rows(
+                    rows,
+                    following_fields=following_fields,
+                )
+            else:
+                compacted_rows = self._compact_interpretation_rows(rows)
+
+            for line_number, fields in zip(block, compacted_rows, strict=True):
+                compacted_line = "\t".join(fields)
+                if compacted_line != self.lines[line_number]:
+                    self.lines[line_number] = compacted_line
+                    changed = True
+
+            block.clear()
+
+        for line_number, line in enumerate(self.lines):
+            if not music_started:
+                if line.startswith("="):
+                    music_started = True
+                continue
+
+            if is_target_record(line):
+                block.append(line_number)
+            else:
+                compact_block()
+
+        compact_block()
+        return changed
+
+    def _compact_comment_rows(
+        self,
+        rows: list[list[str]],
+        *,
+        following_fields: list[str] | None,
+    ) -> list[list[str]]:
+        height = len(rows)
+        width = len(rows[0])
+        following_fields = following_fields or [""] * width
+
+        values_by_column = [
+            [fields[column] for fields in rows if fields[column] != "!"] for column in range(width)
+        ]
+        ordered_columns = {
+            column
+            for column, values in enumerate(values_by_column)
+            if any(value.startswith("!LO:MO") for value in values)
+        }
+
+        key_order: dict[tuple[str, ...], int] = {}
+        for fields in rows:
+            for field in fields:
+                if field == "!":
+                    continue
+
+                key = self._local_comment_group_key(field)
+                if key not in key_order:
+                    key_order[key] = len(key_order)
+
+        compacted_rows = [["!"] * width for _row in range(height)]
+        flexible_values: list[list[str]] = [[] for _column in range(width)]
+        flexible_ranges: list[tuple[int, int] | None] = [None] * width
+
+        for column, values in enumerate(values_by_column):
+            if not values:
+                continue
+
+            start_row = height - len(values)
+
+            if column in ordered_columns:
+                for row, value in enumerate(values, start=start_row):
+                    compacted_rows[row][column] = value
+                continue
+
+            following_token = following_fields[column] if column < len(following_fields) else ""
+            anchored = [
+                value
+                for value in values
+                if self._comment_attaches_to_dynamic(
+                    value,
+                    following_token,
+                )
+            ]
+            flexible = [
+                value
+                for value in values
+                if not self._comment_attaches_to_dynamic(
+                    value,
+                    following_token,
+                )
+            ]
+
+            flexible_values[column] = flexible
+            anchor_start = height - len(anchored)
+            flexible_ranges[column] = (start_row, anchor_start)
+
+            for row, value in enumerate(anchored, start=anchor_start):
+                compacted_rows[row][column] = value
+
+        for row in range(height):
+            active_columns = {
+                column
+                for column, row_range in enumerate(flexible_ranges)
+                if (row_range is not None and row_range[0] <= row < row_range[1])
+            }
+
+            fixed_key_counts: dict[tuple[str, ...], int] = {}
+            for field in compacted_rows[row]:
+                if field == "!":
+                    continue
+
+                key = self._local_comment_group_key(field)
+                fixed_key_counts[key] = fixed_key_counts.get(key, 0) + 1
+
+            while active_columns:
+                candidate_counts: dict[tuple[str, ...], int] = {}
+
+                for column in active_columns:
+                    column_keys = {
+                        self._local_comment_group_key(value) for value in flexible_values[column]
+                    }
+                    for key in column_keys:
+                        candidate_counts[key] = candidate_counts.get(key, 0) + 1
+
+                best_key = max(
+                    candidate_counts,
+                    key=lambda key: (
+                        fixed_key_counts.get(key, 0),
+                        candidate_counts[key],
+                        -key_order[key],
+                    ),
+                )
+
+                for column in list(active_columns):
+                    matching_index = next(
+                        (
+                            index
+                            for index, value in enumerate(flexible_values[column])
+                            if self._local_comment_group_key(value) == best_key
+                        ),
+                        None,
+                    )
+                    if matching_index is None:
+                        continue
+
+                    value = flexible_values[column].pop(matching_index)
+                    compacted_rows[row][column] = value
+                    active_columns.remove(column)
+
+        return compacted_rows
+
+    def _comment_attaches_to_dynamic(
+        self,
+        comment: str,
+        following_token: str,
+    ) -> bool:
+        if not following_token or following_token == ".":
+            return False
+
+        parameters = comment.split(":")
+        namespace = ":".join(parameters[:2])
+
+        if namespace == "!LO:HP":
+            return "<" in following_token or ">" in following_token
+
+        if namespace == "!LO:DY":
+            token = following_token.lower()
+            return any(marker in token for marker in ("p", "f", "s"))
+
+        return False
+
+    def _compact_interpretation_rows(
+        self,
+        rows: list[list[str]],
+    ) -> list[list[str]]:
+        width = len(rows[0])
+        sequences = [
+            [fields[column] for fields in rows if fields[column] != "*"] for column in range(width)
+        ]
+
+        for sequence in sequences:
+            part_index = next(
+                (index for index, token in enumerate(sequence) if token.startswith("*part")),
+                None,
+            )
+            staff_index = next(
+                (index for index, token in enumerate(sequence) if token.startswith("*staff")),
+                None,
+            )
+
+            if part_index is None or staff_index is None or staff_index == part_index + 1:
+                continue
+
+            part_token = sequence.pop(part_index)
+            staff_index = next(
+                index for index, token in enumerate(sequence) if token.startswith("*staff")
+            )
+            sequence.insert(staff_index, part_token)
+
+        return self._pack_sequences_down(
+            sequences,
+            height=len(rows),
+            null_token="*",
+        )
+
+    def _pack_columns_down(
+        self,
+        rows: list[list[str]],
+        *,
+        null_token: str,
+    ) -> list[list[str]]:
+        width = len(rows[0])
+        sequences = [
+            [fields[column] for fields in rows if fields[column] != null_token]
+            for column in range(width)
+        ]
+        return self._pack_sequences_down(
+            sequences,
+            height=len(rows),
+            null_token=null_token,
+        )
+
+    def _pack_sequences_down(
+        self,
+        sequences: list[list[str]],
+        *,
+        height: int,
+        null_token: str,
+    ) -> list[list[str]]:
+        width = len(sequences)
+        compacted_rows = [[null_token] * width for _row in range(height)]
+
+        for column, values in enumerate(sequences):
+            start_row = height - len(values)
+            for row_offset, value in enumerate(values, start=start_row):
+                compacted_rows[row_offset][column] = value
+
+        return compacted_rows
+
+    def _local_comment_group_key(self, comment: str) -> tuple[str, ...]:
+        if not comment.startswith("!LO:"):
+            return (comment,)
+
+        parameters = comment.split(":")
+        namespace = ":".join(parameters[:2])
+
+        if namespace != "!LO:TX":
+            return (namespace,)
+
+        content_parameters = tuple(
+            sorted(
+                parameter
+                for parameter in parameters[2:]
+                if parameter.startswith(("t=", "problem="))
+            )
+        )
+        if content_parameters:
+            return (namespace, *content_parameters)
+
+        return (namespace, comment)
+
     def color_notation_elements(
         self,
         *,

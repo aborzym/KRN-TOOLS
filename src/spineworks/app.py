@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 from spineworks import __version__
 from spineworks.filters import (
     HumdrumToolError,
+    compact_records,
     insert_spine,
     remove_spine,
     remove_system_breaks,
@@ -318,6 +319,14 @@ class MainWindow(QMainWindow):
         self.color_elements_button.setEnabled(False)
         self.color_elements_button.clicked.connect(self.apply_element_coloring)
 
+        self.compact_records_button = QPushButton("Kompaktuj rekordy")
+        self.compact_records_button.setObjectName("primaryButton")
+        self.compact_records_button.setEnabled(False)
+        self.compact_records_button.setToolTip(
+            "Porządkuje komentarze lokalne i interpretacje oraz usuwa puste rekordy."
+        )
+        self.compact_records_button.clicked.connect(self.apply_record_compaction)
+
         self.breaks_button = QPushButton("Usuń łamania")
         self.breaks_button.setObjectName("dangerButton")
         self.breaks_button.setEnabled(False)
@@ -372,6 +381,12 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Fixed,
         )
         operations.addWidget(self.color_elements_button, 2, 2)
+
+        self.compact_records_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        operations.addWidget(self.compact_records_button, 2, 3)
 
         self.propagate_button = QPushButton("Uzupełnij i popraw przypisania spine’ów")
         self.propagate_button.setObjectName("primaryButton")
@@ -438,6 +453,7 @@ class MainWindow(QMainWindow):
         self.color_elements_button.setEnabled(
             any(spine_type == "**kern" for spine_type in document.spine_types)
         )
+        self.compact_records_button.setEnabled(True)
         self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
@@ -1598,6 +1614,35 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self.statusBar().showMessage("Usunięto łamania systemów")
 
+    def apply_record_compaction(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        before = self.document.to_text()
+
+        try:
+            filtered = compact_records(self.document)
+        except HumdrumError as error:
+            self._show_filter_error(
+                "Nie można skompaktować rekordów",
+                error,
+            )
+            return
+
+        if filtered.to_text() == before:
+            self.statusBar().showMessage("Komentarze i interpretacje nie wymagają porządkowania")
+            return
+
+        self.document = filtered
+        self.undo_texts.append(before)
+        self.undo_action.setEnabled(True)
+        self.show_group_row = self.document.header.instrument_group_line is not None
+        self._sync_ig_button()
+        self._refresh_table()
+        self.statusBar().showMessage("Uporządkowano komentarze i interpretacje")
+
     def remove_selected_spine(self) -> None:
         if self.document is None:
             return
@@ -1851,6 +1896,8 @@ class MainWindow(QMainWindow):
         self.color_elements_button.setEnabled(
             any(spine_type == "**kern" for spine_type in self.document.spine_types)
         )
+        self.compact_records_button.setEnabled(True)
+
         self.system_decoration_input.blockSignals(True)
         self.system_decoration_input.setText(self.document.system_decoration())
         self.system_decoration_input.blockSignals(False)
@@ -1972,14 +2019,16 @@ class MainWindow(QMainWindow):
                 if self.document.spine_types[column] == "**kern":
                     item.setBackground(QColor("#18271e"))
                 self.table.setItem(row, column, item)
-                editable_fields = [
-                    field
-                    for kind, fields in self.row_inputs.items()
-                    if kind in self.enabled_edit_rows
-                    for field in fields.values()
-                ]
+
+        editable_fields = [
+            field
+            for kind, fields in self.row_inputs.items()
+            if kind in self.enabled_edit_rows
+            for field in fields.values()
+        ]
         for current, following in pairwise(editable_fields):
             QWidget.setTabOrder(current, following)
+
         self.table.resizeRowsToContents()
         self.table.resizeColumnsToContents()
         for column in range(self.table.columnCount()):

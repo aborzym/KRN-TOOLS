@@ -900,3 +900,149 @@ def test_extends_existing_color_layouts_without_overwriting_color() -> None:
         "([4c#'\t<",
         "*-\t*-",
     ]
+
+
+def test_compacts_and_groups_local_comments_after_first_barline() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "!LO:TX:t=przed\t!\n"
+        "=1\t=1\n"
+        "!LO:TX:t=dupasraka\t!LO:TX:t=Allegro\n"
+        "!\t!\n"
+        "!LO:TX:t=Allegro\t!LO:TX:t=dupasraka\n"
+        "!LO:ACC:color=red\t!LO:ACC:color=blue\n"
+        "!!LO:TX:t=globalny\n"
+        "4c\t4e\n"
+        "*-\t*-\n"
+    )
+
+    assert document.compact_local_comment_records() is True
+    assert document.lines == [
+        "**kern\t**kern",
+        "!LO:TX:t=przed\t!",
+        "=1\t=1",
+        "!\t!",
+        "!LO:TX:t=dupasraka\t!LO:TX:t=dupasraka",
+        "!LO:TX:t=Allegro\t!LO:TX:t=Allegro",
+        "!LO:ACC:color=red\t!LO:ACC:color=blue",
+        "!!LO:TX:t=globalny",
+        "4c\t4e",
+        "*-\t*-",
+    ]
+
+
+def test_lo_mo_does_not_block_sorting_in_other_columns() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n!A\t!\n!\t!B\n!LO:MO:n=1\t!\n!\t!C\n!D\t!\n4c\t4e\n*-\t*-\n"
+    )
+
+    assert document.compact_local_comment_records() is True
+    assert document.lines == [
+        "**kern\t**kern",
+        "=1\t=1",
+        "!\t!",
+        "!\t!",
+        "!A\t!",
+        "!LO:MO:n=1\t!B",
+        "!D\t!C",
+        "4c\t4e",
+        "*-\t*-",
+    ]
+
+
+def test_compacts_interpretations_and_places_part_above_staff() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "*before1\t*\n"
+        "*\t*before2\n"
+        "=1\t=1\n"
+        "*staff1\t*\n"
+        "*clefF4\t*part2\n"
+        '*part1\t*I"Cello\n'
+        '*I"Violin\t*staff2\n'
+        "*\t*clefF4\n"
+        "4c\t4e\n"
+        "*-\t*-\n"
+    )
+
+    assert document.compact_interpretation_records() is True
+    assert document.lines == [
+        "**kern\t**kern",
+        "*before1\t*",
+        "*\t*before2",
+        "=1\t=1",
+        "*\t*",
+        '*part1\t*I"Cello',
+        "*staff1\t*part2",
+        "*clefF4\t*staff2",
+        '*I"Violin\t*clefF4',
+        "4c\t4e",
+        "*-\t*-",
+    ]
+
+
+def test_places_dynamic_layout_comments_directly_before_tokens() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\t**dynam\n"
+        "=1\t=1\t=1\t=1\n"
+        "!\t!LO:DY:rj\t!LO:TX:t=Andante\t!\n"
+        "!LO:TX:t=Allegro\t!\t!\t!LO:HP:color=red\n"
+        "4c\tp\t4e\t<\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+
+    assert document.compact_local_comment_records() is True
+    assert document.lines == [
+        "**kern\t**dynam\t**kern\t**dynam",
+        "=1\t=1\t=1\t=1",
+        "!\t!\t!\t!",
+        "!LO:TX:t=Allegro\t!LO:DY:rj\t!LO:TX:t=Andante\t!LO:HP:color=red",
+        "4c\tp\t4e\t<",
+        "*-\t*-\t*-\t*-",
+    ]
+
+
+def test_lo_mo_preserves_only_its_own_column_order() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\n"
+        "=1\t=1\n"
+        "!A\t!LO:DY:rj\n"
+        "!LO:MO:color=red\t!\n"
+        "!B\t!LO:TX:t=forte\n"
+        "4c\tf\n"
+        "*-\t*-\n"
+    )
+
+    assert document.compact_local_comment_records() is True
+    assert document.lines == [
+        "**kern\t**dynam",
+        "=1\t=1",
+        "!A\t!",
+        "!LO:MO:color=red\t!LO:TX:t=forte",
+        "!B\t!LO:DY:rj",
+        "4c\tf",
+        "*-\t*-",
+    ]
+
+
+def test_compacts_kern_comments_against_tokens_before_aligning_them() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\t**kern\n"
+        "=1\t=1\t=1\n"
+        "!LO:ART:a\t!LO:TX:t=Allegro\t!\n"
+        "!\t!LO:ART:b\t!LO:TX:t=Allegro\n"
+        "!LO:TX:t=Allegro\t!\t!\n"
+        "4c\t4e\t4g\n"
+        "*-\t*-\t*-\n"
+    )
+
+    assert document.compact_local_comment_records() is True
+    assert document.lines == [
+        "**kern\t**kern\t**kern",
+        "=1\t=1\t=1",
+        "!\t!\t!",
+        "!LO:ART:a\t!LO:ART:b\t!",
+        "!LO:TX:t=Allegro\t!LO:TX:t=Allegro\t!LO:TX:t=Allegro",
+        "4c\t4e\t4g",
+        "*-\t*-\t*-",
+    ]
