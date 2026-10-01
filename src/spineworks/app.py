@@ -100,6 +100,11 @@ class MainWindow(QMainWindow):
         self.enabled_edit_rows: set[str] = set()
         self.editable_row_indexes: dict[int, str] = {}
         self.show_group_row = False
+        self._coloring_start_measure = 1
+        self._coloring_end_measure = 1
+        self._coloring_start_spine = 0
+        self._coloring_end_spine = 0
+        self._coloring_color = "dodgerblue"
         self.setWindowTitle("SPINEWORKS")
         self.resize(1200, 650)
         self.setAcceptDrops(True)
@@ -1197,14 +1202,14 @@ class MainWindow(QMainWindow):
         form = QFormLayout(dialog)
 
         all_measures_checkbox = QCheckBox("Wszystkie takty", dialog)
-        all_measures_checkbox.setChecked(True)
+        all_measures_checkbox.setChecked(False)
         form.addRow(all_measures_checkbox)
 
         measure_input_width = 150
 
         start_measure_input = QSpinBox(dialog)
         start_measure_input.setRange(0, 999_999)
-        start_measure_input.setValue(1)
+        start_measure_input.setValue(self._coloring_start_measure)
         start_measure_input.setFixedWidth(measure_input_width)
         form.addRow("Od taktu:", start_measure_input)
 
@@ -1214,7 +1219,7 @@ class MainWindow(QMainWindow):
 
         end_measure_input = QSpinBox(end_measure_widget)
         end_measure_input.setRange(0, 999_999)
-        end_measure_input.setValue(1)
+        end_measure_input.setValue(self._coloring_end_measure)
         end_measure_input.setFixedWidth(measure_input_width)
 
         to_end_checkbox = QCheckBox("Do końca", end_measure_widget)
@@ -1226,7 +1231,7 @@ class MainWindow(QMainWindow):
         form.addRow("Do taktu:", end_measure_widget)
 
         all_spines_checkbox = QCheckBox("Wszystkie spiny", dialog)
-        all_spines_checkbox.setChecked(True)
+        all_spines_checkbox.setChecked(False)
         form.addRow(all_spines_checkbox)
 
         start_spine_combo = QComboBox(dialog)
@@ -1236,7 +1241,17 @@ class MainWindow(QMainWindow):
             start_spine_combo.addItem(label)
             end_spine_combo.addItem(label)
 
-        end_spine_combo.setCurrentIndex(end_spine_combo.count() - 1)
+        last_spine_index = end_spine_combo.count() - 1
+        start_spine_index = min(
+            max(self._coloring_start_spine, 0),
+            last_spine_index,
+        )
+        end_spine_index = min(
+            max(self._coloring_end_spine, start_spine_index),
+            last_spine_index,
+        )
+        start_spine_combo.setCurrentIndex(start_spine_index)
+        end_spine_combo.setCurrentIndex(end_spine_index)
         form.addRow("Od spinu:", start_spine_combo)
         form.addRow("Do spinu:", end_spine_combo)
 
@@ -1252,7 +1267,7 @@ class MainWindow(QMainWindow):
                 "green",
             ]
         )
-        color_combo.setCurrentText("dodgerblue")
+        color_combo.setCurrentText(self._coloring_color)
 
         color_completer = color_combo.completer()
         if color_completer is not None:
@@ -1375,6 +1390,11 @@ class MainWindow(QMainWindow):
                 selected_columns = set().union(
                     *(columns for _label, columns in part_options[start_index : end_index + 1])
                 )
+            self._coloring_start_measure = start_measure_input.value()
+            self._coloring_end_measure = end_measure_input.value()
+            self._coloring_start_spine = start_spine_combo.currentIndex()
+            self._coloring_end_spine = end_spine_combo.currentIndex()
+            self._coloring_color = color
 
             return (
                 start_measure,
