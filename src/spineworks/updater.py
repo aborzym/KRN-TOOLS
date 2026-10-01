@@ -1,0 +1,443 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import platform
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+from PySide6.QtCore import QObject, QProcess, QSettings, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QMessageBox,
+    QProgressDialog,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
+
+from spineworks.updates import UpdateInfo, update_from_release
+
+LATEST_RELEASE_API_URL = "https://api.github.com/repos/aborzym/KRN-TOOLS/releases/latest"
+
+
+class UpdateManager(QObject):
+    def __init__(
+        self,
+        parent: QWidget,
+        *,
+        settings: QSettings,
+        current_version: str,
+    ) -> None:
+        super().__init__(parent)
+        self.parent_widget = parent
+        self.settings = settings
+        self.current_version = current_version
+        self.network_manager = QNetworkAccessManager(self)
+        self.download_reply: QNetworkReply | None = None
+        self.download_progress: QProgressDialog | None = None
+        self.download_directory: Path | None = None
+        self.download_path: Path | None = None
+        self.install_process: QProcess | None = None
+
+    def check_for_updates(self, *, show_current_message: bool = False) -> None:
+        request = QNetworkRequest(QUrl(LATEST_RELEASE_API_URL))
+        request.setRawHeader(b"Accept", b"application/vnd.github+json")
+        request.setRawHeader(b"X-GitHub-Api-Version", b"2022-11-28")
+        request.setRawHeader(
+            b"User-Agent",
+            f"SPINEWORKS/{self.current_version}".encode("ascii"),
+        )
+
+        reply = self.network_manager.get(request)
+        reply.finished.connect(
+            lambda: self._finish_update_check(
+                reply,
+                show_current_message=show_current_message,
+            )
+        )
+
+        if show_current_message:
+            self._show_status("Sprawdzanie dostępności aktualizacji…")
+
+    def _finish_update_check(
+        self,
+        reply: QNetworkReply,
+        *,
+        show_current_message: bool,
+    ) -> None:
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        response = bytes(reply.readAll())
+        network_error = reply.error()
+        error_text = reply.errorString()
+        reply.deleteLater()
+
+        if show_current_message:
+            self._show_status("")
+
+        if (
+            network_error != QNetworkReply.NetworkError.NoError
+            or status is None
+            or not 200 <= int(status) < 300
+        ):
+            if show_current_message:
+                QMessageBox.warning(
+                    self.parent_widget,
+                    "Nie można sprawdzić aktualizacji",
+                    "Nie udało się połączyć z serwisem GitHub.\n\n"
+                    f"Kod HTTP: {status or 'brak'}\n"
+                    f"{error_text}",
+                )
+            return
+
+        try:
+            release = json.loads(response.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            if show_current_message:
+                QMessageBox.warning(
+                    self.parent_widget,
+                    "Nie można sprawdzić aktualizacji",
+                    "GitHub zwrócił nieprawidłowe dane wydania.",
+                )
+            return
+
+        if not isinstance(release, dict):
+            return
+
+        skipped_version = ""
+        if not show_current_message:
+            stored_value = self.settings.value(
+                "updates/skipped_version",
+                "",
+            )
+            skipped_version = str(stored_value or "")
+
+        update = update_from_release(
+            release,
+            current_version=self.current_version,
+            platform_name=sys.platform,
+            machine=platform.machine(),
+            skipped_version=skipped_version,
+        )
+
+        if update is None:
+            if show_current_message:
+                QMessageBox.information(
+                    self.parent_widget,
+                    "Brak aktualizacji",
+                    "Używasz najnowszej wersji programu dostępnej dla tego systemu.",
+                )
+            return
+
+        self._show_update_dialog(update)
+
+    def _show_update_dialog(self, update: UpdateInfo) -> None:
+        dialog = QDialog(self.parent_widget)
+        dialog.setWindowTitle("Dostępna aktualizacja")
+        dialog.resize(680, 470)
+
+        layout = QVBoxLayout(dialog)
+
+        title = QLabel(
+            f"<b>Dostępna jest wersja SPINEWORKS {update.version}</b><br>"
+            f"Obecnie używana wersja: {self.current_version}",
+            dialog,
+        )
+        title.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(title)
+
+        description = QLabel("Co nowego:", dialog)
+        layout.addWidget(description)
+
+        notes = QTextBrowser(dialog)
+        notes.setOpenExternalLinks(True)
+        notes.setMarkdown(update.notes.strip() or "Autor nie dołączył opisu zmian do tego wydania.")
+        layout.addWidget(notes, 1)
+
+        size_megabytes = update.asset_size / (1024 * 1024)
+        details = QLabel(
+            f"Plik: {update.asset_name}<br>Rozmiar: {size_megabytes:.1f} MB",
+            dialog,
+        )
+        details.setTextFormat(Qt.TextFormat.RichText)
+        layout.addWidget(details)
+
+        buttons = QDialogButtonBox(dialog)
+        install_button = buttons.addButton(
+            "Pobierz i zainstaluj",
+            QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+        later_button = buttons.addButton(
+            "Przypomnij później",
+            QDialogButtonBox.ButtonRole.RejectRole,
+        )
+        skip_button = buttons.addButton(
+            f"Pomiń wersję {update.version}",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        release_button = buttons.addButton(
+            "Strona wydania",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+
+        install_button.clicked.connect(dialog.accept)
+        later_button.clicked.connect(dialog.reject)
+        skip_button.clicked.connect(lambda: self._skip_version(update.version, dialog))
+        release_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(update.release_url)))
+
+        layout.addWidget(buttons)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._download_update(update)
+
+    def _skip_version(self, version: str, dialog: QDialog) -> None:
+        self.settings.setValue("updates/skipped_version", version)
+        self.settings.sync()
+        dialog.reject()
+        self._show_status(f"Pominięto aktualizację {version}")
+
+    def _download_update(self, update: UpdateInfo) -> None:
+        self.download_directory = Path(tempfile.mkdtemp(prefix="spineworks-update-"))
+        self.download_path = self.download_directory / update.asset_name
+
+        request = QNetworkRequest(QUrl(update.asset_url))
+        request.setRawHeader(
+            b"User-Agent",
+            f"SPINEWORKS/{self.current_version}".encode("ascii"),
+        )
+
+        reply = self.network_manager.get(request)
+        self.download_reply = reply
+
+        progress = QProgressDialog(
+            f"Pobieranie SPINEWORKS {update.version}…",
+            "Anuluj",
+            0,
+            update.asset_size,
+            self.parent_widget,
+        )
+        progress.setWindowTitle("Aktualizacja SPINEWORKS")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        self.download_progress = progress
+
+        reply.downloadProgress.connect(
+            lambda received, total: self._update_download_progress(
+                received,
+                total,
+                update.asset_size,
+            )
+        )
+        progress.canceled.connect(reply.abort)
+        reply.finished.connect(lambda: self._finish_update_download(reply, update))
+
+        progress.show()
+        self._show_status(f"Pobieranie SPINEWORKS {update.version}…")
+
+    def _update_download_progress(
+        self,
+        received: int,
+        total: int,
+        expected_size: int,
+    ) -> None:
+        if self.download_progress is None:
+            return
+
+        maximum = total if total > 0 else expected_size
+        self.download_progress.setMaximum(maximum)
+        self.download_progress.setValue(max(received, 0))
+
+    def _finish_update_download(
+        self,
+        reply: QNetworkReply,
+        update: UpdateInfo,
+    ) -> None:
+        if self.download_progress is not None:
+            self.download_progress.close()
+            self.download_progress.deleteLater()
+            self.download_progress = None
+
+        network_error = reply.error()
+        error_text = reply.errorString()
+        data = bytes(reply.readAll())
+        reply.deleteLater()
+        self.download_reply = None
+
+        if network_error == QNetworkReply.NetworkError.OperationCanceledError:
+            self._clear_download()
+            self._show_status("Anulowano pobieranie aktualizacji")
+            return
+
+        if network_error != QNetworkReply.NetworkError.NoError:
+            self._clear_download()
+            QMessageBox.warning(
+                self.parent_widget,
+                "Nie udało się pobrać aktualizacji",
+                error_text,
+            )
+            return
+
+        if len(data) != update.asset_size:
+            self._clear_download()
+            QMessageBox.warning(
+                self.parent_widget,
+                "Nieprawidłowy plik aktualizacji",
+                "Rozmiar pobranego pliku nie zgadza się z danymi opublikowanymi na GitHubie.",
+            )
+            return
+
+        calculated_sha256 = hashlib.sha256(data).hexdigest()
+        if calculated_sha256 != update.asset_sha256:
+            self._clear_download()
+            QMessageBox.critical(
+                self.parent_widget,
+                "Nieprawidłowa suma kontrolna",
+                "Pobrany instalator nie przeszedł kontroli SHA-256 i nie zostanie uruchomiony.",
+            )
+            return
+
+        if self.download_path is None:
+            self._clear_download()
+            return
+
+        try:
+            self.download_path.write_bytes(data)
+        except OSError as error:
+            self._clear_download()
+            QMessageBox.warning(
+                self.parent_widget,
+                "Nie można zapisać aktualizacji",
+                str(error),
+            )
+            return
+
+        self._show_status("Pobrano i zweryfikowano aktualizację")
+        self._install_update(update)
+
+    def _install_update(self, update: UpdateInfo) -> None:
+        if self.download_path is None:
+            return
+
+        if sys.platform.startswith("linux"):
+            self._install_linux_update(update)
+            return
+
+        if sys.platform == "darwin":
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.download_path)))
+            QMessageBox.information(
+                self.parent_widget,
+                "Pobrano aktualizację",
+                "Instalator DMG został otwarty. Przenieś aplikację "
+                "SPINEWORKS do katalogu Aplikacje, zastępując starszą wersję.",
+            )
+            return
+
+        QMessageBox.information(
+            self.parent_widget,
+            "Pobrano aktualizację",
+            f"Instalator zapisano w:\n{self.download_path}",
+        )
+
+    def _install_linux_update(self, update: UpdateInfo) -> None:
+        if self.download_path is None:
+            return
+
+        pkexec = shutil.which("pkexec")
+        apt = shutil.which("apt")
+
+        if pkexec is None or apt is None:
+            QMessageBox.warning(
+                self.parent_widget,
+                "Nie można uruchomić instalatora",
+                "Nie znaleziono programu pkexec lub apt.\n\n"
+                f"Instalator pozostawiono w:\n{self.download_path}",
+            )
+            return
+
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.finished.connect(
+            lambda exit_code, _exit_status: self._finish_linux_install(
+                exit_code,
+                update,
+            )
+        )
+        process.errorOccurred.connect(lambda _error: self._linux_install_start_error(process))
+
+        self.install_process = process
+        self._show_status("Oczekiwanie na potwierdzenie instalacji aktualizacji…")
+        process.start(
+            pkexec,
+            [
+                apt,
+                "install",
+                "-y",
+                str(self.download_path),
+            ],
+        )
+
+    def _linux_install_start_error(self, process: QProcess) -> None:
+        QMessageBox.warning(
+            self.parent_widget,
+            "Nie można uruchomić aktualizacji",
+            process.errorString(),
+        )
+        self.install_process = None
+
+    def _finish_linux_install(
+        self,
+        exit_code: int,
+        update: UpdateInfo,
+    ) -> None:
+        output = ""
+        if self.install_process is not None:
+            output = bytes(self.install_process.readAllStandardOutput()).decode(
+                "utf-8", errors="replace"
+            )
+            self.install_process.deleteLater()
+            self.install_process = None
+
+        if exit_code != 0:
+            QMessageBox.warning(
+                self.parent_widget,
+                "Aktualizacja nie została zainstalowana",
+                f"Instalator zakończył pracę z błędem.\n\n{output[-4000:]}",
+            )
+            return
+
+        self._clear_download()
+
+        QMessageBox.information(
+            self.parent_widget,
+            "Aktualizacja zakończona",
+            f"Zainstalowano SPINEWORKS {update.version}. Program zostanie uruchomiony ponownie.",
+        )
+
+        launcher = shutil.which("spineworks") or "/usr/bin/spineworks"
+        QProcess.startDetached(launcher, [])
+        QApplication.quit()
+
+    def _clear_download(self) -> None:
+        if self.download_directory is not None:
+            shutil.rmtree(self.download_directory, ignore_errors=True)
+
+        self.download_directory = None
+        self.download_path = None
+
+    def _show_status(self, message: str) -> None:
+        status_bar_method = getattr(
+            self.parent_widget,
+            "statusBar",
+            None,
+        )
+        if callable(status_bar_method):
+            status_bar_method().showMessage(message)
