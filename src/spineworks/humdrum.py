@@ -83,8 +83,6 @@ class HumdrumDocument:
         self.lines[line_number] = "\t".join(fields)
 
     def propagate_kern_assignments(self) -> bool:
-        if self.header.part_line is None or self.header.staff_line is None:
-            raise HumdrumError("Brak wiersza *part… albo *staff… w nagłówku pliku.")
 
         spine_types = self.spine_types
         classes = self.instrument_classes()
@@ -96,7 +94,8 @@ class HumdrumDocument:
         kern_columns = [
             column for column, spine_type in enumerate(spine_types) if spine_type == "**kern"
         ]
-
+        if not kern_columns:
+            raise HumdrumError("Dokument nie zawiera żadnego spinu **kern.")
         staff_numbers = {
             column: number for number, column in enumerate(reversed(kern_columns), start=1)
         }
@@ -131,15 +130,41 @@ class HumdrumDocument:
                 parts[column] = f"*part{active_part}"
                 staffs[column] = f"*staff{active_staff}"
 
+        rows_created = False
+
+        if self.header.part_line is None:
+            insert_at = (
+                self.header.staff_line
+                if self.header.staff_line is not None
+                else self.header.exclusive_line + 1
+            )
+            self.lines.insert(insert_at, "\t".join(parts))
+            rows_created = True
+            self.header = self._find_header()
+
+        if self.header.staff_line is None:
+            if self.header.part_line is None:
+                raise HumdrumError("Nie udało się utworzyć wiersza *part…")
+
+            insert_at = self.header.part_line + 1
+            self.lines.insert(insert_at, "\t".join(staffs))
+            rows_created = True
+            self.header = self._find_header()
+
+        if self.header.part_line is None or self.header.staff_line is None:
+            raise HumdrumError("Nie udało się utworzyć wierszy *part… i *staff…")
+
         old_parts = self.fields(self.header.part_line)
         old_staffs = self.fields(self.header.staff_line)
         self._validate_width(old_parts, "*part")
         self._validate_width(old_staffs, "*staff")
-        changed = parts != old_parts or staffs != old_staffs
-        if changed:
+
+        assignments_changed = parts != old_parts or staffs != old_staffs
+        if assignments_changed:
             self.replace_fields(self.header.part_line, parts)
             self.replace_fields(self.header.staff_line, staffs)
-        return changed
+
+        return rows_created or assignments_changed
 
     def instrument_codes(self) -> list[str]:
         if self.header.instrument_code_line is None:

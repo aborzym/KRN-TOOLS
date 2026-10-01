@@ -103,13 +103,64 @@ def test_adds_instrument_group_between_class_and_code() -> None:
     assert document.instrument_codes() == ["*Iorgan", "*Ibass"]
 
 
-def test_rejects_missing_staff_row() -> None:
+def test_creates_missing_staff_row_after_part() -> None:
     document = HumdrumDocument.from_text(
         f"{EXCLUSIVE}\n*part2\t*\t*\t*part1\t*part1\n=1\t=1\t=1\t=1\t=1\n"
     )
 
-    with pytest.raises(HumdrumError, match="staff"):
-        document.propagate_kern_assignments()
+    assert document.propagate_kern_assignments() is True
+    assert document.header.part_line is not None
+    assert document.header.staff_line == document.header.part_line + 1
+    assert document.fields(document.header.part_line) == [
+        "*part2",
+        "*part2",
+        "*part2",
+        "*part1",
+        "*part1",
+    ]
+    assert document.fields(document.header.staff_line) == [
+        "*staff2",
+        "*staff2",
+        "*staff2",
+        "*staff1",
+        "*staff1",
+    ]
+
+
+def test_creates_missing_part_row_before_staff() -> None:
+    document = HumdrumDocument.from_text(
+        f"{EXCLUSIVE}\n*staff2\t*\t*\t*staff1\t*staff1\n=1\t=1\t=1\t=1\t=1\n"
+    )
+
+    assert document.propagate_kern_assignments() is True
+    assert document.header.part_line is not None
+    assert document.header.staff_line == document.header.part_line + 1
+    assert document.fields(document.header.part_line) == [
+        "*part2",
+        "*part2",
+        "*part2",
+        "*part1",
+        "*part1",
+    ]
+    assert document.fields(document.header.staff_line) == [
+        "*staff2",
+        "*staff2",
+        "*staff2",
+        "*staff1",
+        "*staff1",
+    ]
+
+
+def test_creates_missing_part_and_staff_rows_after_exclusive_record() -> None:
+    document = HumdrumDocument.from_text(f"{EXCLUSIVE}\n=1\t=1\t=1\t=1\t=1\n")
+
+    assert document.propagate_kern_assignments() is True
+    assert document.header.part_line == document.header.exclusive_line + 1
+    assert document.header.staff_line == document.header.part_line + 1
+    assert document.lines[1:3] == [
+        "*part2\t*part2\t*part2\t*part1\t*part1",
+        "*staff2\t*staff2\t*staff2\t*staff1\t*staff1",
+    ]
 
 
 def test_uploaded_file_has_sixteen_spines() -> None:
