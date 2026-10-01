@@ -2,6 +2,7 @@ from spineworks.humdrum import HumdrumDocument
 from spineworks.spine_validation import (
     RecordKind,
     find_split_issues,
+    group_split_issues,
     read_records,
     trace_spines,
 )
@@ -277,3 +278,81 @@ def test_allows_nested_closings_of_same_root_spine() -> None:
 
     assert trace.issue is None
     assert find_split_issues(trace) == ()
+
+
+def test_groups_problems_and_includes_helper_spines() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Trumpet\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "2c\t2ryy\tp\t2e\t2ryy\n"
+        "*v\t*v\t*\t*\t*\n"
+        "2d\t.\t2f\t2ryy\n"
+        "*clefG2\t*\t*\t*\n"
+        "=46\t=46\t=46\t=46\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+
+    trace = trace_spines(document)
+    ranges = group_split_issues(trace, find_split_issues(trace))
+
+    assert trace.issue is None
+    assert len(ranges) == 1
+    problem = ranges[0]
+    assert problem.measure == "45"
+    assert problem.start_line == 3
+    assert problem.end_line == 9
+    assert {issue.code for issue in problem.issues} == {
+        "early_merge",
+        "interpretation_after_merge",
+    }
+    assert [identity.instrument for identity in problem.editable_identities] == [
+        "Violin 2",
+    ]
+    assert [identity.instrument for identity in problem.helper_identities] == [
+        "Trumpet",
+    ]
+
+
+def test_repeated_measure_numbers_do_not_combine_different_places() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n=1\n4c\n*^\n2d\t2e\n*v\t*v\n=1\n4f\n*^\n2g\t2a\n*-\t*-\n"
+    )
+
+    trace = trace_spines(document)
+    ranges = group_split_issues(trace, find_split_issues(trace))
+
+    assert trace.issue is None
+    assert len(ranges) == 2
+    assert [problem.measure for problem in ranges] == ["1", "1"]
+    assert [problem.start_line for problem in ranges] == [2, 7]
+
+
+def test_omits_helper_split_unchanged_through_problem_measure() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        '*I"Violin 2\t*I"Bassoon\n'
+        "=44\t=44\n"
+        "*\t*^\n"
+        "1c\t1e\t1ryy\n"
+        "=45\t=45\t=45\n"
+        "*^\t*\t*\n"
+        "2c\t2ryy\t2e\t2ryy\n"
+        "*v\t*v\t*\t*\n"
+        "2d\t2f\t2ryy\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+
+    trace = trace_spines(document)
+    ranges = group_split_issues(trace, find_split_issues(trace))
+
+    assert trace.issue is None
+    assert len(ranges) == 1
+    assert ranges[0].measure == "45"
+    assert [identity.instrument for identity in ranges[0].editable_identities] == ["Violin 2"]
+    assert ranges[0].helper_identities == ()
+
+    # Bassoon still contributes two fields to the complete source record.
+    assert trace.records[7].record.spine_count == 4

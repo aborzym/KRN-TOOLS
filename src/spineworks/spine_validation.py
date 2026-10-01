@@ -406,3 +406,83 @@ def find_split_issues(trace: SpineTrace) -> tuple[SplitIssue, ...]:
 
     check_measure(measure_rows, measure)
     return tuple(issues)
+
+
+@dataclass(frozen=True)
+class ProblemRange:
+    measure: str | None
+    start_line: int
+    end_line: int
+    issues: tuple[SplitIssue, ...]
+    editable_identities: tuple[SpineIdentity, ...]
+    helper_identities: tuple[SpineIdentity, ...]
+
+
+def group_split_issues(
+    trace: SpineTrace,
+    issues: tuple[SplitIssue, ...],
+) -> tuple[ProblemRange, ...]:
+    """Group issues by physical measure boundaries, not measure labels."""
+    grouped: dict[tuple[int, int], list[SplitIssue]] = {}
+    rows = trace.records
+
+    for issue in issues:
+        start_line = next(
+            (
+                row.record.line_number
+                for row in reversed(rows)
+                if row.record.kind is RecordKind.BARLINE
+                and row.record.line_number <= issue.line_number
+            ),
+            1,
+        )
+        end_line = next(
+            (
+                row.record.line_number
+                for row in rows
+                if row.record.kind is RecordKind.BARLINE
+                and row.record.line_number > issue.line_number
+            ),
+            rows[-1].record.line_number if rows else issue.line_number,
+        )
+        grouped.setdefault((start_line, end_line), []).append(issue)
+
+    ranges: list[ProblemRange] = []
+
+    for (start_line, end_line), range_issues in sorted(grouped.items()):
+        editable = {identity for issue in range_issues for identity in issue.identities}
+        involved = set(editable)
+
+        for row in rows:
+            # The final barline is context; the next measure starts there.
+            if not start_line <= row.record.line_number < end_line:
+                continue
+
+            if row.record.kind is RecordKind.INTERPRETATION:
+                for token, branch in zip(
+                    row.record.fields,
+                    row.branches,
+                    strict=True,
+                ):
+                    if token in {"*^", "*v"}:
+                        involved.add(branch.identity)
+
+        ranges.append(
+            ProblemRange(
+                measure=range_issues[0].measure,
+                start_line=start_line,
+                end_line=end_line,
+                issues=tuple(range_issues),
+                editable_identities=tuple(
+                    sorted(editable, key=lambda identity: identity.root_column)
+                ),
+                helper_identities=tuple(
+                    sorted(
+                        involved - editable,
+                        key=lambda identity: identity.root_column,
+                    )
+                ),
+            )
+        )
+
+    return tuple(ranges)
