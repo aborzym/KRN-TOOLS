@@ -1578,6 +1578,8 @@ class MainWindow(QMainWindow):
         if not self.apply_instrument_codes(show_unchanged_status=False):
             return
         before = self.document.to_text()
+        had_measure_numbers = self.document.has_numbered_measures()
+
         try:
             filtered = run_barnum(self.document)
         except HumdrumError as error:
@@ -1590,7 +1592,10 @@ class MainWindow(QMainWindow):
         self.undo_texts.append(before)
         self.undo_action.setEnabled(True)
         self._refresh_table()
-        self.statusBar().showMessage("Ponownie ponumerowano takty")
+        if had_measure_numbers:
+            self.statusBar().showMessage("Ponownie ponumerowano takty")
+        else:
+            self.statusBar().showMessage("Ponumerowano takty")
 
     def remove_system_break_records(self) -> None:
         if self.document is None:

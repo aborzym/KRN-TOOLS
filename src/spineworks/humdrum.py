@@ -82,6 +82,14 @@ class HumdrumDocument:
             )
         self.lines[line_number] = "\t".join(fields)
 
+    def has_numbered_measures(self) -> bool:
+        return any(
+            re.match(r"^=+\d", field)
+            for line in self.lines
+            if line.startswith("=")
+            for field in line.split("\t")
+        )
+
     def propagate_kern_assignments(self) -> bool:
 
         spine_types = self.spine_types

@@ -1097,3 +1097,15 @@ def test_compacts_kern_comments_against_tokens_before_aligning_them() -> None:
         "4c\t4e\t4g",
         "*-\t*-\t*-",
     ]
+
+
+def test_detects_numbered_measures() -> None:
+    document = HumdrumDocument.from_text("**kern\t**kern\n=1\t=1\n4c\t4e\n==12\t==12\n*-\t*-\n")
+
+    assert document.has_numbered_measures() is True
+
+
+def test_reports_no_measure_numbers_for_unnumbered_barlines() -> None:
+    document = HumdrumDocument.from_text("**kern\t**kern\n=\t=\n4c\t4e\n==\t==\n*-\t*-\n")
+
+    assert document.has_numbered_measures() is False
