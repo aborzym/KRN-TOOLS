@@ -1,5 +1,10 @@
 from spineworks.humdrum import HumdrumDocument
-from spineworks.spine_validation import RecordKind, read_records, trace_spines
+from spineworks.spine_validation import (
+    RecordKind,
+    find_split_issues,
+    read_records,
+    trace_spines,
+)
 
 
 def test_spaces_do_not_create_spines() -> None:
@@ -149,3 +154,100 @@ def test_rejects_early_termination() -> None:
     assert trace.issue is not None
     assert trace.issue.line_number == 3
     assert "przed końcem utworu" in trace.issue.message
+
+
+def test_detects_late_split_after_data_in_other_spine() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=45\t=45\n.\t4c\n*^\t*\n4e\t4g\t4d\n*-\t*-\t*-\n"
+    )
+
+    issues = find_split_issues(trace_spines(document))
+
+    assert len(issues) == 1
+    assert issues[0].code == "late_split"
+    assert issues[0].line_number == 4
+    assert issues[0].measure == "45"
+    assert issues[0].related_lines == (3,)
+
+
+def test_detects_early_merge_even_when_following_token_is_dot() -> None:
+    document = HumdrumDocument.from_text("**kern\n=45\n*^\n2c\t2ryy\n*v\t*v\n.\n=46\n*-\n")
+
+    issues = find_split_issues(trace_spines(document))
+
+    assert len(issues) == 1
+    assert issues[0].code == "early_merge"
+    assert issues[0].line_number == 5
+    assert issues[0].related_lines == (6,)
+
+
+def test_allows_multimeasure_split_and_comments_after_merge() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "=45\n"
+        "!!!OMD: Allegro\n"
+        "*^\n"
+        "!\t!\n"
+        "1c\t1ryy\n"
+        "=46\t=46\n"
+        "1d\t1ryy\n"
+        "*v\t*v\n"
+        "!Komentarz\n"
+        "!!Komentarz globalny\n"
+        "=47\n"
+        "*-\n"
+    )
+
+    assert find_split_issues(trace_spines(document)) == ()
+
+
+def test_detects_ordinary_interpretation_after_merge() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n*^\n1c\t1e\n*v\t*v\n*clefG2\n=2\n*-\n")
+
+    issues = find_split_issues(trace_spines(document))
+
+    assert len(issues) == 1
+    assert issues[0].code == "interpretation_after_merge"
+    assert issues[0].related_lines == (6,)
+
+
+def test_detects_two_independent_merges_in_one_line() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n*^\t*^\n1c\t1e\t1g\t1b\n*v\t*v\t*v\t*v\n=2\t=2\n*-\t*-\n"
+    )
+
+    trace = trace_spines(document)
+
+    # Adjacent *v tokens form one group, so this is structurally ambiguous.
+    assert trace.issue is not None
+
+
+def test_reports_separated_merge_groups() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        "=1\t=1\t=1\n"
+        "*^\t*\t*^\n"
+        "1c\t1e\tp\t1g\t1b\n"
+        "*v\t*v\t*\t*v\t*v\n"
+        "=2\t=2\t=2\n"
+        "*-\t*-\t*-\n"
+    )
+
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+
+    assert trace.issue is None
+    assert len(issues) == 1
+    assert issues[0].code == "multiple_merges"
+    assert len(issues[0].identities) == 2
+
+
+def test_allows_separate_closing_rows_and_final_termination() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n*^\t*^\n1c\t1e\t1g\t1b\n*\t*\t*v\t*v\n*v\t*v\t*\n*-\t*-\n"
+    )
+
+    trace = trace_spines(document)
+
+    assert trace.issue is None
+    assert find_split_issues(trace) == ()

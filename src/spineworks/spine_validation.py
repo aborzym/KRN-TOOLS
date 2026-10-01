@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -247,3 +248,132 @@ def trace_spines(document: HumdrumDocument) -> SpineTrace:
         active = tuple(following)
 
     return SpineTrace(tuple(traced), None)
+
+    return SpineTrace(tuple(traced), None)
+
+
+@dataclass(frozen=True)
+class SplitIssue:
+    code: str
+    line_number: int
+    measure: str | None
+    identities: tuple[SpineIdentity, ...]
+    related_lines: tuple[int, ...]
+    message: str
+
+
+def find_split_issues(trace: SpineTrace) -> tuple[SplitIssue, ...]:
+    """Check project placement rules within the safely traced range."""
+    issues: list[SplitIssue] = []
+    measure: str | None = None
+    measure_rows: list[TracedRecord] = []
+
+    def check_measure(rows: list[TracedRecord], label: str | None) -> None:
+        data_lines: list[int] = []
+
+        for position, row in enumerate(rows):
+            record = row.record
+            if record.kind is RecordKind.DATA:
+                data_lines.append(record.line_number)
+                continue
+
+            if record.kind is not RecordKind.INTERPRETATION:
+                continue
+
+            openings = tuple(
+                branch.identity
+                for token, branch in zip(record.fields, row.branches, strict=True)
+                if token == "*^"
+            )
+            if openings and data_lines:
+                issues.append(
+                    SplitIssue(
+                        code="late_split",
+                        line_number=record.line_number,
+                        measure=label,
+                        identities=tuple(dict.fromkeys(openings)),
+                        related_lines=tuple(data_lines),
+                        message="Rozdwojenie po rekordach danych w tym takcie.",
+                    )
+                )
+
+            closing_groups: list[SpineIdentity] = []
+            for column, token in enumerate(record.fields):
+                if token == "*v" and (column == 0 or record.fields[column - 1] != "*v"):
+                    closing_groups.append(row.branches[column].identity)
+
+            if not closing_groups:
+                continue
+
+            identities = tuple(dict.fromkeys(closing_groups))
+            if len(closing_groups) > 1:
+                issues.append(
+                    SplitIssue(
+                        code="multiple_merges",
+                        line_number=record.line_number,
+                        measure=label,
+                        identities=identities,
+                        related_lines=(),
+                        message="Niezależne scalenia wymagają osobnych linii.",
+                    )
+                )
+
+            following_data: list[int] = []
+            following_interpretations: list[int] = []
+
+            for following in rows[position + 1 :]:
+                candidate = following.record
+
+                if candidate.kind is RecordKind.DATA:
+                    following_data.append(candidate.line_number)
+                elif candidate.kind is RecordKind.INTERPRETATION:
+                    # Further merges belong to the final closing block.
+                    is_merge_row = "*v" in candidate.fields and all(
+                        token in {"*", "*v"} for token in candidate.fields
+                    )
+                    is_final_termination = all(token == "*-" for token in candidate.fields)
+                    if not is_merge_row and not is_final_termination:
+                        following_interpretations.append(candidate.line_number)
+
+            if following_data:
+                issues.append(
+                    SplitIssue(
+                        code="early_merge",
+                        line_number=record.line_number,
+                        measure=label,
+                        identities=identities,
+                        related_lines=tuple(following_data),
+                        message="Scalenie przed końcem taktu: po *v występują dane.",
+                    )
+                )
+
+            if following_interpretations:
+                issues.append(
+                    SplitIssue(
+                        code="interpretation_after_merge",
+                        line_number=record.line_number,
+                        measure=label,
+                        identities=identities,
+                        related_lines=tuple(following_interpretations),
+                        message="Po scaleniu występują interpretacje poza blokiem zamknięć.",
+                    )
+                )
+
+    for row in trace.records:
+        # The record where tracing failed must not be interpreted further.
+        if trace.issue is not None and row.record.line_number >= trace.issue.line_number:
+            break
+
+        if row.record.kind is RecordKind.BARLINE:
+            check_measure(measure_rows, measure)
+            measure_rows = []
+            match = next(
+                (match for token in row.record.fields if (match := re.match(r"^=+(\d+)", token))),
+                None,
+            )
+            measure = match.group(1) if match is not None else None
+        else:
+            measure_rows.append(row)
+
+    check_measure(measure_rows, measure)
+    return tuple(issues)
