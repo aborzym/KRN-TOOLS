@@ -104,14 +104,15 @@ pyinstaller --noconfirm --clean SPINEWORKS.spec
 
 ## Pakiety instalacyjne
 
-Wydanie 2.2.0 jest przygotowywane dla następujących platform:
+Wydanie 2.3.0 jest przygotowywane dla następujących platform:
 
-- Linux `x86_64` — `SPINEWORKS-2.2.0-linux-x86_64.deb`;
-- macOS Apple Silicon `arm64` — `SPINEWORKS-2.2.0-macos-arm64.dmg`.
+- Linux `x86_64` — `SPINEWORKS-2.3.0-linux-x86_64.deb`;
+- macOS Apple Silicon `arm64` — `SPINEWORKS-2.3.0-macos-arm64.dmg`.
 
 Wersja dla macOS Intel `x86_64` zostanie dodana oddzielnie.
 
-W przypadku błędu zewnętrznego narzędzia aplikacja może przygotować raport
-diagnostyczny. Raport nie zawiera treści dokumentu `.krn`. Użytkownik może
-świadomie wysłać go autorowi przez Formspree, skopiować do schowka albo otworzyć
-gotowe zgłoszenie w GitHub Issues.
+Od wersji 2.3.0 aplikacja automatycznie sprawdza dostępność nowych wydań.
+Przed instalacją wyświetla opis zmian, pobiera pakiet właściwy dla systemu,
+sprawdza jego rozmiar i sumę SHA-256, a po potwierdzeniu instaluje aktualizację
+i uruchamia program ponownie. Aktualizacje można też sprawdzić ręcznie z paska
+narzędzi.
