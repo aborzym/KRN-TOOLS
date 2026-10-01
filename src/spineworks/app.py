@@ -313,6 +313,11 @@ class MainWindow(QMainWindow):
         self.right_align_dynamics_button.setEnabled(False)
         self.right_align_dynamics_button.clicked.connect(self.apply_right_align_dynamics)
 
+        self.color_elements_button = QPushButton("Koloruj elementy")
+        self.color_elements_button.setObjectName("primaryButton")
+        self.color_elements_button.setEnabled(False)
+        self.color_elements_button.clicked.connect(self.apply_element_coloring)
+
         self.breaks_button = QPushButton("Usuń łamania")
         self.breaks_button.setObjectName("dangerButton")
         self.breaks_button.setEnabled(False)
@@ -361,6 +366,12 @@ class MainWindow(QMainWindow):
         for column, button in enumerate((self.breaks_button, self.remove_spine_button)):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             operations.addWidget(button, 2, column)
+
+        self.color_elements_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        operations.addWidget(self.color_elements_button, 2, 2)
 
         self.propagate_button = QPushButton("Uzupełnij i popraw przypisania spine’ów")
         self.propagate_button.setObjectName("primaryButton")
@@ -423,6 +434,9 @@ class MainWindow(QMainWindow):
         self.right_align_dynamics_button.setEnabled(
             any(spine_type == "**kern" for spine_type in document.spine_types)
             and any(spine_type == "**dynam" for spine_type in document.spine_types)
+        )
+        self.color_elements_button.setEnabled(
+            any(spine_type == "**kern" for spine_type in document.spine_types)
         )
         self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
@@ -1061,7 +1075,7 @@ class MainWindow(QMainWindow):
                     QMessageBox.warning(
                         dialog,
                         "Nieprawidłowy zakres spinów",
-                        "Pierwszy spin nie może znajdować się za ostatnim.",
+                        "Pierwszy spine nie może znajdować się za ostatnim.",
                     )
                     continue
 
@@ -1104,6 +1118,299 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Liczba przesuniętych oznaczeń dynamiki: {changed_count}")
         else:
             self.statusBar().showMessage("Nie znaleziono dynamiki wymagającej przesunięcia")
+
+    def _ask_element_coloring(
+        self,
+    ) -> tuple[int | None, int | None, set[int], str, set[str]] | None:
+        if self.document is None:
+            return None
+
+        kern_columns = [
+            column
+            for column, spine_type in enumerate(self.document.spine_types)
+            if spine_type == "**kern"
+        ]
+        if not kern_columns:
+            return None
+
+        descriptions = self._spine_descriptions()
+        part_groups: dict[int, set[int]] = {}
+
+        if self.document.header.part_line is not None:
+            part_fields = self.document.fields(self.document.header.part_line)
+            for column in kern_columns:
+                token = part_fields[column]
+                number = token.removeprefix("*part")
+                if token.startswith("*part") and number.isdigit():
+                    part_groups.setdefault(int(number), set()).add(column)
+
+        part_options: list[tuple[str, set[int]]] = []
+
+        if part_groups:
+            for part_number in sorted(part_groups):
+                columns = part_groups[part_number]
+                names = list(
+                    dict.fromkeys(
+                        descriptions[column].rsplit(" — ", 1)[-1] for column in sorted(columns)
+                    )
+                )
+                part_options.append(
+                    (
+                        f"{part_number} — {' / '.join(names)}",
+                        columns,
+                    )
+                )
+
+            grouped_columns = set().union(*(columns for _label, columns in part_options))
+            for column in kern_columns:
+                if column in grouped_columns:
+                    continue
+                name = descriptions[column].rsplit(" — ", 1)[-1]
+                part_options.append((f"? — {name}", {column}))
+        else:
+            for part_number, column in enumerate(
+                reversed(kern_columns),
+                start=1,
+            ):
+                name = descriptions[column].rsplit(" — ", 1)[-1]
+                part_options.append((f"{part_number} — {name}", {column}))
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Koloruj elementy")
+        dialog.setMinimumWidth(560)
+        form = QFormLayout(dialog)
+
+        all_measures_checkbox = QCheckBox("Wszystkie takty", dialog)
+        all_measures_checkbox.setChecked(True)
+        form.addRow(all_measures_checkbox)
+
+        measure_input_width = 150
+
+        start_measure_input = QSpinBox(dialog)
+        start_measure_input.setRange(0, 999_999)
+        start_measure_input.setValue(1)
+        start_measure_input.setFixedWidth(measure_input_width)
+        form.addRow("Od taktu:", start_measure_input)
+
+        end_measure_widget = QWidget(dialog)
+        end_measure_layout = QHBoxLayout(end_measure_widget)
+        end_measure_layout.setContentsMargins(0, 0, 0, 0)
+
+        end_measure_input = QSpinBox(end_measure_widget)
+        end_measure_input.setRange(0, 999_999)
+        end_measure_input.setValue(1)
+        end_measure_input.setFixedWidth(measure_input_width)
+
+        to_end_checkbox = QCheckBox("Do końca", end_measure_widget)
+        to_end_checkbox.setChecked(False)
+
+        end_measure_layout.addWidget(end_measure_input)
+        end_measure_layout.addWidget(to_end_checkbox)
+        end_measure_layout.addStretch(1)
+        form.addRow("Do taktu:", end_measure_widget)
+
+        all_spines_checkbox = QCheckBox("Wszystkie spiny", dialog)
+        all_spines_checkbox.setChecked(True)
+        form.addRow(all_spines_checkbox)
+
+        start_spine_combo = QComboBox(dialog)
+        end_spine_combo = QComboBox(dialog)
+
+        for label, _columns in part_options:
+            start_spine_combo.addItem(label)
+            end_spine_combo.addItem(label)
+
+        end_spine_combo.setCurrentIndex(end_spine_combo.count() - 1)
+        form.addRow("Od spinu:", start_spine_combo)
+        form.addRow("Do spinu:", end_spine_combo)
+
+        color_combo = QComboBox(dialog)
+        color_combo.setEditable(True)
+        color_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        color_combo.addItems(
+            [
+                "blue",
+                "dodgerblue",
+                "red",
+                "purple",
+                "green",
+            ]
+        )
+        color_combo.setCurrentText("dodgerblue")
+
+        color_completer = color_combo.completer()
+        if color_completer is not None:
+            color_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            color_completer.setFilterMode(Qt.MatchFlag.MatchStartsWith)
+
+        form.addRow("Kolor:", color_combo)
+
+        elements_widget = QWidget(dialog)
+        elements_layout = QGridLayout(elements_widget)
+        elements_layout.setContentsMargins(0, 0, 0, 0)
+        elements_layout.setHorizontalSpacing(18)
+        elements_layout.setVerticalSpacing(6)
+
+        element_labels = [
+            ("accidentals", "Akcydencje"),
+            ("articulations", "Artykulacje"),
+            ("hairpins", "Dynamika graficzna"),
+            ("dynamics", "Dynamika literowa"),
+            ("clefs", "Klucze"),
+            ("ties", "Ligatury"),
+            ("slurs", "Łuki"),
+            ("texts", "Teksty"),
+        ]
+        element_checkboxes: dict[str, QCheckBox] = {}
+
+        for index, (element, label) in enumerate(element_labels):
+            checkbox = QCheckBox(label, elements_widget)
+            checkbox.setChecked(False)
+            element_checkboxes[element] = checkbox
+            elements_layout.addWidget(checkbox, index // 2, index % 2)
+
+        has_dynamic_spine = any(spine_type == "**dynam" for spine_type in self.document.spine_types)
+        element_checkboxes["hairpins"].setEnabled(has_dynamic_spine)
+        element_checkboxes["dynamics"].setEnabled(has_dynamic_spine)
+
+        form.addRow("Koloruj:", elements_widget)
+
+        def sync_measure_inputs() -> None:
+            range_enabled = not all_measures_checkbox.isChecked()
+            start_measure_input.setEnabled(range_enabled)
+            to_end_checkbox.setEnabled(range_enabled)
+            end_measure_input.setEnabled(range_enabled and not to_end_checkbox.isChecked())
+
+        def sync_spine_inputs() -> None:
+            range_enabled = not all_spines_checkbox.isChecked()
+            start_spine_combo.setEnabled(range_enabled)
+            end_spine_combo.setEnabled(range_enabled)
+
+        all_measures_checkbox.toggled.connect(sync_measure_inputs)
+        to_end_checkbox.toggled.connect(sync_measure_inputs)
+        all_spines_checkbox.toggled.connect(sync_spine_inputs)
+        sync_measure_inputs()
+        sync_spine_inputs()
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Koloruj")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        while dialog.exec() == QDialog.DialogCode.Accepted:
+            color = color_combo.currentText().strip()
+            if not color:
+                QMessageBox.warning(
+                    dialog,
+                    "Brak koloru",
+                    "Wybierz albo wpisz kolor.",
+                )
+                continue
+
+            selected_elements = {
+                element for element, checkbox in element_checkboxes.items() if checkbox.isChecked()
+            }
+            if not selected_elements:
+                QMessageBox.warning(
+                    dialog,
+                    "Brak elementów",
+                    "Zaznacz przynajmniej jeden rodzaj elementów do kolorowania.",
+                )
+                continue
+
+            if all_measures_checkbox.isChecked():
+                start_measure = None
+                end_measure = None
+            else:
+                start_measure = start_measure_input.value()
+                end_measure = None if to_end_checkbox.isChecked() else end_measure_input.value()
+
+            if (
+                start_measure is not None
+                and end_measure is not None
+                and start_measure > end_measure
+            ):
+                QMessageBox.warning(
+                    dialog,
+                    "Nieprawidłowy zakres taktów",
+                    "Pierwszy takt nie może być późniejszy niż ostatni.",
+                )
+                continue
+
+            if all_spines_checkbox.isChecked():
+                selected_columns = set(kern_columns)
+            else:
+                start_index = start_spine_combo.currentIndex()
+                end_index = end_spine_combo.currentIndex()
+
+                if start_index > end_index:
+                    QMessageBox.warning(
+                        dialog,
+                        "Nieprawidłowy zakres spinów",
+                        "Pierwszy spin nie może znajdować się za ostatnim.",
+                    )
+                    continue
+
+                selected_columns = set().union(
+                    *(columns for _label, columns in part_options[start_index : end_index + 1])
+                )
+
+            return (
+                start_measure,
+                end_measure,
+                selected_columns,
+                color,
+                selected_elements,
+            )
+
+        return None
+
+    def apply_element_coloring(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        choice = self._ask_element_coloring()
+        if choice is None:
+            return
+
+        (
+            start_measure,
+            end_measure,
+            selected_columns,
+            color,
+            selected_elements,
+        ) = choice
+        before = self.document.to_text()
+
+        try:
+            changed_count = self.document.color_notation_elements(
+                start_measure=start_measure,
+                end_measure=end_measure,
+                kern_columns=selected_columns,
+                color=color,
+                elements=selected_elements,
+            )
+        except HumdrumError as error:
+            self._show_copyable_error(
+                "Nie można pokolorować elementów",
+                str(error),
+            )
+            return
+
+        if changed_count:
+            self.undo_texts.append(before)
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self.statusBar().showMessage(f"Liczba dodanych oznaczeń koloru: {changed_count}")
+        else:
+            self.statusBar().showMessage("Nie znaleziono elementów wymagających kolorowania")
 
     def apply_custos(self) -> None:
         if self.document is None:
@@ -1540,6 +1847,9 @@ class MainWindow(QMainWindow):
         self.right_align_dynamics_button.setEnabled(
             any(spine_type == "**kern" for spine_type in self.document.spine_types)
             and any(spine_type == "**dynam" for spine_type in self.document.spine_types)
+        )
+        self.color_elements_button.setEnabled(
+            any(spine_type == "**kern" for spine_type in self.document.spine_types)
         )
         self.system_decoration_input.blockSignals(True)
         self.system_decoration_input.setText(self.document.system_decoration())

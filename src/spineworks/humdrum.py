@@ -4,6 +4,21 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+ARTICULATION_SIGNIFIERS = frozenset({"'", "`", "~", "^", "u", "v"})
+
+COLORABLE_ELEMENTS = frozenset(
+    {
+        "accidentals",
+        "articulations",
+        "hairpins",
+        "dynamics",
+        "clefs",
+        "ties",
+        "slurs",
+        "texts",
+    }
+)
+
 
 class HumdrumError(ValueError):
     """Raised when the requested Humdrum header cannot be interpreted safely."""
@@ -1190,6 +1205,342 @@ class HumdrumDocument:
             reverse=True,
         ):
             self.lines.insert(line_number, "\t".join(fields))
+
+        self.header = self._find_header()
+        return changed_count
+
+    def color_notation_elements(
+        self,
+        *,
+        start_measure: int | None,
+        end_measure: int | None,
+        kern_columns: set[int],
+        color: str,
+        elements: set[str],
+    ) -> int:
+        if start_measure is not None and end_measure is not None and start_measure > end_measure:
+            raise HumdrumError("Pierwszy takt zakresu nie może być późniejszy niż ostatni.")
+
+        color = color.strip()
+        if not color:
+            raise HumdrumError("Nie wpisano koloru.")
+
+        unknown_elements = elements - COLORABLE_ELEMENTS
+        if unknown_elements:
+            raise HumdrumError(
+                "Nieznane rodzaje elementów do kolorowania: " + ", ".join(sorted(unknown_elements))
+            )
+        if not elements:
+            raise HumdrumError("Nie wybrano żadnych elementów do kolorowania.")
+
+        initial_types = self.spine_types.copy()
+        selected_kerns = {
+            column
+            for column in kern_columns
+            if 0 <= column < len(initial_types) and initial_types[column] == "**kern"
+        }
+        if not selected_kerns:
+            raise HumdrumError("Nie wybrano żadnego spinu **kern.")
+
+        if self.header.staff_line is not None:
+            initial_staffs = self.fields(self.header.staff_line)
+        else:
+            initial_staffs = [""] * len(initial_types)
+
+        active_spines: list[tuple[str, bool]] = []
+        nearest_kern: int | None = None
+
+        for column, spine_type in enumerate(initial_types):
+            if spine_type == "**kern":
+                nearest_kern = column
+                active_spines.append((spine_type, column in selected_kerns))
+                continue
+
+            selected_dynamic = False
+            if spine_type == "**dynam":
+                staff = initial_staffs[column] if column < len(initial_staffs) else ""
+                related_kerns = {
+                    kern_column
+                    for kern_column, kern_type in enumerate(initial_types)
+                    if (
+                        kern_type == "**kern"
+                        and staff.startswith("*staff")
+                        and kern_column < len(initial_staffs)
+                        and initial_staffs[kern_column] == staff
+                    )
+                }
+
+                if related_kerns:
+                    selected_dynamic = bool(related_kerns & selected_kerns)
+                elif nearest_kern is not None:
+                    selected_dynamic = nearest_kern in selected_kerns
+
+            active_spines.append((spine_type, selected_dynamic))
+
+        current_measure: int | None = None
+        music_started = False
+        local_comment_lines: list[int] = []
+        updates: dict[int, list[str]] = {}
+        insertions: dict[int, list[list[str]]] = {}
+        changed_count = 0
+
+        def in_measure_range() -> bool:
+            if not music_started:
+                return False
+            if start_measure is None and end_measure is None:
+                return True
+            if current_measure is None:
+                return False
+            return (start_measure is None or current_measure >= start_measure) and (
+                end_measure is None or current_measure <= end_measure
+            )
+
+        def comment_has_color(comment: str) -> bool:
+            return any(parameter.startswith("color=") for parameter in comment.split(":")[2:])
+
+        def ensure_layout(
+            *,
+            line_number: int,
+            column: int,
+            prefix: str,
+        ) -> None:
+            nonlocal changed_count
+
+            marker = f"!{prefix}"
+
+            for comment_line in reversed(local_comment_lines):
+                comment_fields = updates.setdefault(
+                    comment_line,
+                    self.fields(comment_line).copy(),
+                )
+                comment = comment_fields[column]
+
+                if not (comment == marker or comment.startswith(f"{marker}:")):
+                    continue
+
+                if not comment_has_color(comment):
+                    comment_fields[column] = f"{comment}:color={color}"
+                    changed_count += 1
+                return
+
+            empty_comment_line = next(
+                (
+                    comment_line
+                    for comment_line in reversed(local_comment_lines)
+                    if updates.setdefault(
+                        comment_line,
+                        self.fields(comment_line).copy(),
+                    )[column]
+                    == "!"
+                ),
+                None,
+            )
+
+            if empty_comment_line is not None:
+                updates[empty_comment_line][column] = f"{marker}:color={color}"
+                changed_count += 1
+                return
+
+            insertion_rows = insertions.setdefault(line_number, [])
+            insertion_row = next(
+                (fields for fields in insertion_rows if fields[column] == "!"),
+                None,
+            )
+
+            if insertion_row is None:
+                insertion_row = ["!"] * len(active_spines)
+                insertion_rows.append(insertion_row)
+
+            insertion_row[column] = f"{marker}:color={color}"
+            changed_count += 1
+
+        for line_number in range(
+            self.header.exclusive_line + 1,
+            len(self.lines),
+        ):
+            line = self.lines[line_number]
+
+            if line.startswith("!!") or not line:
+                local_comment_lines.clear()
+                continue
+
+            fields = line.split("\t")
+            if len(fields) != len(active_spines):
+                raise HumdrumError(f"Nieprawidłowa liczba spinów — linia {line_number + 1}: {line}")
+
+            if line.startswith("="):
+                local_comment_lines.clear()
+                music_started = True
+                numbered_barline = next(
+                    (match for token in fields if (match := re.match(r"^=+(\d+)", token))),
+                    None,
+                )
+                if numbered_barline is not None:
+                    current_measure = int(numbered_barline.group(1))
+                continue
+
+            if line.startswith("!"):
+                if in_measure_range() and "texts" in elements:
+                    for column, (spine_type, selected) in enumerate(active_spines):
+                        if spine_type != "**kern" or not selected:
+                            continue
+
+                        comment_fields = updates.setdefault(
+                            line_number,
+                            fields.copy(),
+                        )
+                        comment = comment_fields[column]
+
+                        if not (comment == "!LO:TX" or comment.startswith("!LO:TX:")):
+                            continue
+
+                        if not comment_has_color(comment):
+                            comment_fields[column] = f"{comment}:color={color}"
+                            changed_count += 1
+
+                local_comment_lines.append(line_number)
+                continue
+
+            if line.startswith("*"):
+                if in_measure_range() and "clefs" in elements:
+                    for column, (spine_type, selected) in enumerate(active_spines):
+                        if (
+                            spine_type == "**kern"
+                            and selected
+                            and fields[column].startswith("*clef")
+                        ):
+                            ensure_layout(
+                                line_number=line_number,
+                                column=column,
+                                prefix="LO:CL",
+                            )
+
+                local_comment_lines.clear()
+
+                if any(token in {"*x", "*+"} for token in fields):
+                    bad_token = next(token for token in fields if token in {"*x", "*+"})
+                    raise HumdrumError(
+                        f"Nieobsługiwany manipulator spinu — linia {line_number + 1}: {bad_token}"
+                    )
+
+                next_spines: list[tuple[str, bool]] = []
+                column = 0
+
+                while column < len(fields):
+                    token = fields[column]
+                    spine_type, selected = active_spines[column]
+
+                    if token == "*^":
+                        next_spines.append((spine_type, selected))
+                        next_spines.append((spine_type, selected))
+                        column += 1
+                        continue
+
+                    if token == "*v":
+                        merge_end = column
+                        while merge_end < len(fields) and fields[merge_end] == "*v":
+                            merge_end += 1
+
+                        if merge_end - column < 2:
+                            raise HumdrumError(
+                                f"Nieprawidłowe scalenie spinów — linia {line_number + 1}: {line}"
+                            )
+
+                        merged_spines = active_spines[column:merge_end]
+                        merged_type = merged_spines[0][0]
+                        if any(
+                            candidate_type != merged_type
+                            for candidate_type, _selected in merged_spines
+                        ):
+                            raise HumdrumError(
+                                f"Scalenie spinów różnych typów — linia {line_number + 1}: {line}"
+                            )
+
+                        next_spines.append(
+                            (
+                                merged_type,
+                                any(
+                                    merged_selected
+                                    for _candidate_type, merged_selected in merged_spines
+                                ),
+                            )
+                        )
+                        column = merge_end
+                        continue
+
+                    if token == "*-":
+                        column += 1
+                        continue
+
+                    next_spines.append((spine_type, selected))
+                    column += 1
+
+                active_spines = next_spines
+                continue
+
+            if not in_measure_range():
+                local_comment_lines.clear()
+                continue
+
+            for column, (spine_type, selected) in enumerate(active_spines):
+                if not selected:
+                    continue
+
+                token = fields[column]
+                if token in {"", "."}:
+                    continue
+
+                prefixes: list[str] = []
+
+                if spine_type == "**kern":
+                    if "accidentals" in elements and any(
+                        signifier in token for signifier in ("#", "n", "-")
+                    ):
+                        prefixes.append("LO:ACC")
+
+                    if "articulations" in elements and any(
+                        signifier in token for signifier in ARTICULATION_SIGNIFIERS
+                    ):
+                        prefixes.append("LO:ART")
+
+                    if "ties" in elements and any(signifier in token for signifier in ("[", "_")):
+                        prefixes.append("LO:T")
+
+                    if "slurs" in elements and "(" in token:
+                        prefixes.append("LO:S")
+
+                elif spine_type == "**dynam":
+                    if "hairpins" in elements and any(
+                        signifier in token for signifier in ("<", ">")
+                    ):
+                        prefixes.append("LO:HP")
+
+                    if "dynamics" in elements and any(
+                        signifier in token for signifier in ("p", "f", "s")
+                    ):
+                        prefixes.append("LO:DY")
+
+                for prefix in prefixes:
+                    ensure_layout(
+                        line_number=line_number,
+                        column=column,
+                        prefix=prefix,
+                    )
+
+            local_comment_lines.clear()
+
+        if changed_count == 0:
+            return 0
+
+        for line_number, fields in updates.items():
+            self.lines[line_number] = "\t".join(fields)
+
+        for line_number, rows in sorted(
+            insertions.items(),
+            reverse=True,
+        ):
+            for fields in reversed(rows):
+                self.lines.insert(line_number, "\t".join(fields))
 
         self.header = self._find_header()
         return changed_count
