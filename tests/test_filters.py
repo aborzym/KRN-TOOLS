@@ -160,3 +160,49 @@ def test_filter_adds_tool_directory_to_path(
     filtered = filters.remove_system_breaks(document)
 
     assert "!!linebreak:original" not in filtered.to_text()
+
+
+def test_compacts_records_and_runs_rid_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n!A\t!\n!\t!B\n!\t!\n*foo\t*\n*\t*bar\n*\t*\n4c\t4e\n*-\t*-\n"
+    )
+    calls: list[tuple[list[str], str]] = []
+
+    monkeypatch.setattr(
+        filters,
+        "find_humdrum_tool",
+        lambda name: "/usr/local/bin/rid",
+    )
+
+    def fake_run_filter(
+        arguments: list[str],
+        source: str,
+        name: str,
+    ) -> str:
+        calls.append((arguments, name))
+        null_token = "!" if "-l" in arguments else "*"
+        remaining_lines = [
+            line
+            for line in source.splitlines()
+            if not (line and all(field == null_token for field in line.split("\t")))
+        ]
+        return "\n".join(remaining_lines) + "\n"
+
+    monkeypatch.setattr(filters, "_run_filter", fake_run_filter)
+
+    compacted = filters.compact_records(document)
+
+    assert calls == [
+        (["/usr/local/bin/rid", "-l"], "rid -l"),
+        (["/usr/local/bin/rid", "-i"], "rid -i"),
+    ]
+    assert compacted.lines == [
+        "**kern\t**kern",
+        "=1\t=1",
+        "!A\t!B",
+        "*foo\t*bar",
+        "4c\t4e",
+        "*-\t*-",
+    ]

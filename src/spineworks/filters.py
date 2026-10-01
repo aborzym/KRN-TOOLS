@@ -280,6 +280,28 @@ def remove_system_breaks(document: HumdrumDocument) -> HumdrumDocument:
     return HumdrumDocument.from_text(output)
 
 
+def compact_records(document: HumdrumDocument) -> HumdrumDocument:
+    rid = find_humdrum_tool("rid")
+
+    compacted = HumdrumDocument.from_text(document.to_text())
+    compacted.compact_local_comment_records()
+
+    output = _run_filter(
+        [rid, "-l"],
+        compacted.to_text(),
+        "rid -l",
+    )
+    compacted = HumdrumDocument.from_text(output)
+    compacted.compact_interpretation_records()
+
+    output = _run_filter(
+        [rid, "-i"],
+        compacted.to_text(),
+        "rid -i",
+    )
+    return HumdrumDocument.from_text(output)
+
+
 def insert_spine(
     document: HumdrumDocument,
     *,
