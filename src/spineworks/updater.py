@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import shutil
 import sys
@@ -332,13 +333,7 @@ class UpdateManager(QObject):
             return
 
         if sys.platform == "darwin":
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.download_path)))
-            QMessageBox.information(
-                self.parent_widget,
-                "Pobrano aktualizację",
-                "Instalator DMG został otwarty. Przenieś aplikację "
-                "SPINEWORKS do katalogu Aplikacje, zastępując starszą wersję.",
-            )
+            self._install_macos_update(update)
             return
 
         QMessageBox.information(
@@ -346,6 +341,192 @@ class UpdateManager(QObject):
             "Pobrano aktualizację",
             f"Instalator zapisano w:\n{self.download_path}",
         )
+
+    def _install_macos_update(self, update: UpdateInfo) -> None:
+        if self.download_path is None or self.download_directory is None:
+            return
+
+        application_path = self._macos_application_path()
+        if application_path is None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.download_path)))
+            QMessageBox.warning(
+                self.parent_widget,
+                "Nie można automatycznie zainstalować aktualizacji",
+                "Nie udało się ustalić położenia aplikacji SPINEWORKS.\n\n"
+                "Otworzono pobrany instalator DMG. Zastąp aplikację ręcznie.",
+            )
+            return
+
+        if not application_path.exists():
+            QMessageBox.warning(
+                self.parent_widget,
+                "Nie można automatycznie zainstalować aktualizacji",
+                f"Nie znaleziono aplikacji:\n{application_path}",
+            )
+            return
+
+        helper_path = self.download_directory / "install-macos-update.sh"
+        try:
+            helper_path.write_text(
+                self._macos_update_script(),
+                encoding="utf-8",
+            )
+        except OSError as error:
+            QMessageBox.warning(
+                self.parent_widget,
+                "Nie można przygotować aktualizacji",
+                str(error),
+            )
+            return
+
+        QMessageBox.information(
+            self.parent_widget,
+            "Aktualizacja jest gotowa",
+            f"SPINEWORKS {update.version} został pobrany i sprawdzony.\n\n"
+            "Program zostanie zamknięty, aplikacja zaktualizowana "
+            "i uruchomiona ponownie.",
+        )
+
+        started = QProcess.startDetached(
+            "/bin/sh",
+            [
+                str(helper_path),
+                str(self.download_path),
+                str(application_path),
+                str(self.download_directory),
+                str(os.getpid()),
+                update.version,
+            ],
+        )
+        if isinstance(started, tuple):
+            started = started[0]
+
+        if not started:
+            QMessageBox.warning(
+                self.parent_widget,
+                "Nie można uruchomić aktualizacji",
+                "Nie udało się uruchomić procesu instalującego aktualizację.\n\n"
+                f"Instalator pozostawiono w:\n{self.download_path}",
+            )
+            return
+
+        QApplication.quit()
+
+    @staticmethod
+    def _macos_application_path() -> Path | None:
+        executable = Path(sys.executable).resolve()
+        for candidate in (executable, *executable.parents):
+            if candidate.suffix == ".app":
+                return candidate
+
+        installed_application = Path("/Applications/SPINEWORKS.app")
+        if installed_application.exists():
+            return installed_application
+
+        return None
+
+    @staticmethod
+    def _macos_update_script() -> str:
+        return """#!/bin/sh
+set -u
+
+dmg_path=$1
+target_app=$2
+work_directory=$3
+old_pid=$4
+expected_version=$5
+
+mount_point="$work_directory/mount"
+log_path="$work_directory/update.log"
+target_parent=$(dirname "$target_app")
+staging_app="$target_parent/.SPINEWORKS-update-new-$$.app"
+backup_app="$target_parent/.SPINEWORKS-update-backup-$$.app"
+mounted=0
+backup_created=0
+
+report_failure() {
+    message=$1
+
+    if [ "$mounted" -eq 1 ]; then
+        /usr/bin/hdiutil detach "$mount_point" -force >>"$log_path" 2>&1 || true
+        mounted=0
+    fi
+
+    if [ "$backup_created" -eq 1 ] && [ ! -e "$target_app" ] && [ -e "$backup_app" ]; then
+        /bin/mv "$backup_app" "$target_app" >>"$log_path" 2>&1 || true
+    fi
+
+    /bin/rm -rf "$staging_app"
+    /usr/bin/osascript -e \
+        'display alert "Aktualizacja SPINEWORKS nie powiodła się" message "'"$message"'
+
+Szczegóły zapisano w:
+'"$log_path"'" as critical buttons {"OK"} default button "OK"' \
+        >/dev/null 2>&1 || true
+    exit 1
+}
+
+: >"$log_path" || exit 1
+/bin/mkdir -p "$mount_point" >>"$log_path" 2>&1 \
+    || report_failure "Nie można przygotować katalogu instalacyjnego."
+
+wait_count=0
+while /bin/kill -0 "$old_pid" 2>/dev/null; do
+    /bin/sleep 0.25
+    wait_count=$((wait_count + 1))
+    if [ "$wait_count" -ge 120 ]; then
+        report_failure "Poprzednia wersja programu nie zakończyła pracy."
+    fi
+done
+
+/usr/bin/hdiutil attach -nobrowse -readonly -mountpoint "$mount_point" "$dmg_path" \
+    >>"$log_path" 2>&1 \
+    || report_failure "Nie można otworzyć obrazu DMG."
+mounted=1
+
+source_app="$mount_point/SPINEWORKS.app"
+if [ ! -d "$source_app" ]; then
+    report_failure "Obraz DMG nie zawiera aplikacji SPINEWORKS."
+fi
+
+/usr/bin/ditto "$source_app" "$staging_app" >>"$log_path" 2>&1 \
+    || report_failure "Nie można skopiować nowej wersji aplikacji."
+
+/usr/bin/codesign --verify --deep --strict "$staging_app" >>"$log_path" 2>&1 \
+    || report_failure "Podpis nowej aplikacji jest nieprawidłowy."
+
+installed_version=$(
+    /usr/libexec/PlistBuddy \
+        -c "Print :CFBundleShortVersionString" \
+        "$staging_app/Contents/Info.plist" 2>>"$log_path"
+)
+if [ "$installed_version" != "$expected_version" ]; then
+    report_failure "Wersja aplikacji w obrazie DMG jest nieprawidłowa."
+fi
+
+/bin/mv "$target_app" "$backup_app" >>"$log_path" 2>&1 \
+    || report_failure "Nie można utworzyć kopii zapasowej poprzedniej wersji."
+backup_created=1
+
+if ! /bin/mv "$staging_app" "$target_app" >>"$log_path" 2>&1; then
+    /bin/mv "$backup_app" "$target_app" >>"$log_path" 2>&1 || true
+    backup_created=0
+    report_failure "Nie można zainstalować nowej wersji aplikacji."
+fi
+
+/usr/bin/hdiutil detach "$mount_point" >>"$log_path" 2>&1 \
+    || /usr/bin/hdiutil detach "$mount_point" -force >>"$log_path" 2>&1 \
+    || true
+mounted=0
+
+/usr/bin/open "$target_app" >>"$log_path" 2>&1 \
+    || report_failure "Aktualizacja została zainstalowana, ale nie można uruchomić aplikacji."
+
+/bin/rm -rf "$backup_app"
+backup_created=0
+/bin/rm -rf "$work_directory"
+exit 0
+"""
 
     def _install_linux_update(self, update: UpdateInfo) -> None:
         if self.download_path is None:

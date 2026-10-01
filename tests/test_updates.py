@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from spineworks.updater import UpdateManager
 from spineworks.updates import (
     expected_asset_name,
     is_newer_version,
@@ -150,3 +151,33 @@ def test_returns_expected_asset_names() -> None:
         )
         is None
     )
+
+
+def test_finds_running_macos_application_bundle(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    application = tmp_path / "SPINEWORKS.app"
+    executable = application / "Contents" / "MacOS" / "SPINEWORKS"
+    executable.parent.mkdir(parents=True)
+    executable.touch()
+
+    monkeypatch.setattr(
+        "spineworks.updater.sys.executable",
+        str(executable),
+    )
+
+    assert UpdateManager._macos_application_path() == application
+
+
+def test_macos_update_helper_verifies_and_safely_replaces_application() -> None:
+    script = UpdateManager._macos_update_script()
+
+    assert "/usr/bin/hdiutil attach -nobrowse -readonly" in script
+    assert "/usr/bin/codesign --verify --deep --strict" in script
+    assert "Print :CFBundleShortVersionString" in script
+    assert 'if [ "$installed_version" != "$expected_version" ]' in script
+    assert '/bin/mv "$target_app" "$backup_app"' in script
+    assert '/bin/mv "$backup_app" "$target_app"' in script
+    assert '/usr/bin/open "$target_app"' in script
+    assert '/bin/rm -rf "$work_directory"' in script
