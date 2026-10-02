@@ -703,3 +703,51 @@ def test_refuses_separating_merge_mixed_with_other_interpretations() -> None:
 
     with pytest.raises(HumdrumError, match="wyłącznie scalenia"):
         separate_merge_rows(document, 5)
+
+
+def test_draft_separates_merges_with_descriptions_and_one_undo() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Oboe\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "1c\t1ryy\tp\t1e\t1ryy\n"
+        "*v\t*v\t*\t*v\t*v\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    rows = build_fragment_rows(
+        trace,
+        problem,
+        build_measure_view(trace, problem, issues),
+    )
+    draft = FragmentDraft(document, rows)
+
+    draft.edit_token(5, 0, "1d")
+    before_operation = draft.to_text()
+
+    assert draft.separate_merges(6) is True
+    inserted = [line for line in draft.rendered_lines() if line.source_line is None]
+    assert [line.description for line in inserted] == [
+        "nowe: Oboe",
+        "nowe: Violin 2",
+    ]
+    assert [line.text for line in inserted] == [
+        "*\t*\t*\t*v\t*v",
+        "*v\t*v\t*\t*",
+    ]
+    assert any(
+        line.source_line == 7 and line.text == "=46\t=46\t=46" for line in draft.rendered_lines()
+    )
+    assert draft.separate_merges(6) is False
+    assert document.to_text() == draft.original_text
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_operation
+    assert draft.token(5, 0) == "1d"
+
+    assert draft.undo() is True
+    assert draft.to_text() == document.to_text()

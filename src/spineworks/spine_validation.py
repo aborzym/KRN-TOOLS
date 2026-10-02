@@ -666,6 +666,13 @@ def build_fragment_rows(
     return tuple(result)
 
 
+@dataclass(frozen=True)
+class DraftLine:
+    source_line: int | None
+    text: str
+    description: str = ""
+
+
 class FragmentDraft:
     """Keep token edits separate from the application's document."""
 
@@ -684,11 +691,17 @@ class FragmentDraft:
             if cell.editable
         }
         self._changes: dict[tuple[int, int], str] = {}
-        self._undo: list[dict[tuple[int, int], str]] = []
+        self._replacements: dict[int, tuple[DraftLine, ...]] = {}
+        self._undo: list[
+            tuple[
+                dict[tuple[int, int], str],
+                dict[int, tuple[DraftLine, ...]],
+            ]
+        ] = []
 
     @property
     def dirty(self) -> bool:
-        return bool(self._changes)
+        return bool(self._changes or self._replacements)
 
     @property
     def can_undo(self) -> bool:
@@ -710,13 +723,16 @@ class FragmentDraft:
         if key not in self._editable_cells:
             raise ValueError("To pole nie jest edytowalne.")
 
+        if source_line in self._replacements:
+            raise ValueError("Ta linia została zastąpiona nowymi wierszami.")
+
         if any(character in token for character in ("\t", "\n", "\r")):
             raise ValueError("Jedno pole nie może zawierać tabulatora ani nowej linii.")
 
         if token == self.token(source_line, source_column):
             return False
 
-        self._undo.append(self._changes.copy())
+        self._undo.append((self._changes.copy(), self._replacements.copy()))
         original = self._source_lines[source_line - 1].split("\t")[source_column]
 
         if token == original:
@@ -729,24 +745,89 @@ class FragmentDraft:
     def undo(self) -> bool:
         if not self._undo:
             return False
-        self._changes = self._undo.pop()
+        self._changes, self._replacements = self._undo.pop()
         return True
 
-    def to_text(self) -> str:
-        lines = list(self._source_lines)
-        changed_rows: dict[int, list[str]] = {}
+    def separate_merges(self, source_line: int) -> bool:
+        if source_line in self._replacements:
+            return False
 
-        for (source_line, source_column), token in self._changes.items():
-            fields = changed_rows.setdefault(
-                source_line,
-                lines[source_line - 1].split("\t"),
+        # Overlay replacements do not change source coordinates of other rows.
+        source_fields = self._source_lines[source_line - 1].split("\t")
+        fields = source_fields.copy()
+
+        for column in range(len(fields)):
+            fields[column] = self.token(source_line, column)
+
+        candidate_lines = list(self._source_lines)
+        candidate_lines[source_line - 1] = "\t".join(fields)
+        candidate = HumdrumDocument(
+            candidate_lines,
+            self._trailing_newline,
+        )
+        replacement = separate_merge_rows(candidate, source_line)
+
+        if len(replacement.lines) < 2:
+            return False
+
+        groups = {identity.root_column for identity in replacement.identities}
+        editable_roots = {
+            column
+            for line, column in self._editable_cells
+            if line == source_line and fields[column] == "*v"
+        }
+        trace = trace_spines(candidate)
+        row = next(item for item in trace.records if item.record.line_number == source_line)
+        permitted_roots = {row.branches[column].identity.root_column for column in editable_roots}
+        if not groups <= permitted_roots:
+            raise ValueError("Scalenie obejmuje grupę tylko do odczytu.")
+
+        self._undo.append((self._changes.copy(), self._replacements.copy()))
+        self._replacements[source_line] = tuple(
+            DraftLine(
+                source_line=None,
+                text=line,
+                description=f"nowe: {identity.instrument or identity.spine_type}",
             )
-            fields[source_column] = token
+            for identity, line in zip(
+                replacement.identities,
+                replacement.lines,
+                strict=True,
+            )
+        )
 
-        for source_line, fields in changed_rows.items():
-            lines[source_line - 1] = "\t".join(fields)
+        for key in list(self._changes):
+            if key[0] == source_line:
+                del self._changes[key]
 
-        text = "\n".join(lines)
+        return True
+
+    def rendered_lines(self) -> tuple[DraftLine, ...]:
+        result: list[DraftLine] = []
+
+        for source_line, text in enumerate(self._source_lines, start=1):
+            replacement = self._replacements.get(source_line)
+            if replacement is not None:
+                result.extend(replacement)
+                continue
+
+            fields = text.split("\t")
+            for column in range(len(fields)):
+                key = (source_line, column)
+                if key in self._changes:
+                    fields[column] = self._changes[key]
+
+            result.append(
+                DraftLine(
+                    source_line=source_line,
+                    text="\t".join(fields),
+                )
+            )
+
+        return tuple(result)
+
+    def to_text(self) -> str:
+        text = "\n".join(line.text for line in self.rendered_lines())
         return text + ("\n" if self._trailing_newline else "")
 
 
