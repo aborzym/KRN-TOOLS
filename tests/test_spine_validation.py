@@ -1,6 +1,7 @@
 import pytest
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
+from spineworks.spine_rhythm import suggest_merge_fill
 from spineworks.spine_validation import (
     FragmentDraft,
     RecordKind,
@@ -1363,3 +1364,50 @@ def test_empty_proposal_group_is_noop() -> None:
 
     assert draft.propose_tokens(()) is False
     assert draft.can_undo is False
+
+
+def test_generated_merge_fill_requires_approval_and_preserves_document() -> None:
+    document, draft = make_test_draft()
+    original = document.to_text()
+
+    suggestions = suggest_merge_fill(document, 6, 0)
+    draft.move_merge(6, 0)
+    before_fill = draft.to_text()
+
+    assert (
+        draft.propose_tokens(
+            tuple((item.source_line, item.source_column, item.token) for item in suggestions)
+        )
+        is True
+    )
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+    assert result.state is ValidationState.PENDING
+
+    proposed_text = draft.to_text()
+    assert draft.approve_suggestions() is True
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+    assert result.state is ValidationState.VALID
+    assert document.to_text() == original
+
+    # Cofnij zatwierdzenie.
+    assert draft.undo() is True
+    assert draft.to_text() == proposed_text
+    assert (
+        validate_draft(
+            draft,
+            start_line=3,
+            end_line=8,
+        ).state
+        is ValidationState.PENDING
+    )
+
+    # Cofnij całą grupę propozycji.
+    assert draft.undo() is True
+    assert draft.to_text() == before_fill
+    assert draft.pending_suggestions == ()
+
+    # Cofnij przeniesienie scalenia.
+    assert draft.undo() is True
+    assert draft.to_text() == original
