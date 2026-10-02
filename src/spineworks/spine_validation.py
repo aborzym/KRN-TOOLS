@@ -263,8 +263,6 @@ def trace_spines(document: HumdrumDocument) -> SpineTrace:
 
     return SpineTrace(tuple(traced), None)
 
-    return SpineTrace(tuple(traced), None)
-
 
 @dataclass(frozen=True)
 class SplitIssue:
@@ -696,10 +694,12 @@ class FragmentDraft:
         }
         self._changes: dict[tuple[int, int], str] = {}
         self._replacements: dict[int, tuple[DraftLine, ...]] = {}
+        self._pending_suggestions: set[tuple[int, int]] = set()
         self._undo: list[
             tuple[
                 dict[tuple[int, int], str],
                 dict[int, tuple[DraftLine, ...]],
+                set[tuple[int, int]],
             ]
         ] = []
 
@@ -710,6 +710,19 @@ class FragmentDraft:
     @property
     def can_undo(self) -> bool:
         return bool(self._undo)
+
+    @property
+    def pending_suggestions(self) -> tuple[tuple[int, int], ...]:
+        return tuple(sorted(self._pending_suggestions))
+
+    def _remember(self) -> None:
+        self._undo.append(
+            (
+                self._changes.copy(),
+                self._replacements.copy(),
+                self._pending_suggestions.copy(),
+            )
+        )
 
     @property
     def missing_data_cells(self) -> tuple[tuple[int, int], ...]:
@@ -751,7 +764,7 @@ class FragmentDraft:
         if token == self.token(source_line, source_column):
             return False
 
-        self._undo.append((self._changes.copy(), self._replacements.copy()))
+        self._remember()
         original = self._source_lines[source_line - 1].split("\t")[source_column]
 
         if token == original:
@@ -764,7 +777,12 @@ class FragmentDraft:
     def undo(self) -> bool:
         if not self._undo:
             return False
-        self._changes, self._replacements = self._undo.pop()
+
+        (
+            self._changes,
+            self._replacements,
+            self._pending_suggestions,
+        ) = self._undo.pop()
         return True
 
     def separate_merges(self, source_line: int) -> bool:
@@ -801,7 +819,7 @@ class FragmentDraft:
         if not groups <= permitted_roots:
             raise ValueError("Scalenie obejmuje grupę tylko do odczytu.")
 
-        self._undo.append((self._changes.copy(), self._replacements.copy()))
+        self._remember()
         self._replacements[source_line] = tuple(
             DraftLine(
                 source_line=None,
@@ -873,7 +891,7 @@ class FragmentDraft:
             root_column,
         )
 
-        self._undo.append((self._changes.copy(), self._replacements.copy()))
+        self._remember()
 
         for replaced_line, replacement in proposal.replacements:
             self._replacements[replaced_line] = replacement
@@ -960,7 +978,7 @@ class FragmentDraft:
                     anchor_line=line.anchor_line,
                 )
 
-                self._undo.append((self._changes.copy(), self._replacements.copy()))
+                self._remember()
                 self._replacements[source_line] = tuple(updated)
                 return True
 
