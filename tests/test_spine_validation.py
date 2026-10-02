@@ -12,6 +12,7 @@ from spineworks.spine_validation import (
     ProblemRange,
     RecordKind,
     ValidationState,
+    build_draft_fragment_rows,
     build_fragment_rows,
     build_measure_view,
     find_split_issues,
@@ -2558,3 +2559,66 @@ def test_join_reopenings_is_one_undo_and_preserves_prior_edit() -> None:
 
     assert draft.undo() is True
     assert draft.to_text() == draft.original_text
+
+
+def test_draft_view_shows_extended_branch_after_moving_merge() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    before_view = draft.to_text()
+
+    rows = build_draft_fragment_rows(
+        draft,
+        start_line=3,
+        end_line=8,
+        editable_roots={0},
+        helper_roots={2},
+    )
+    extended = next(row for row in rows if row.source_line == 7)
+    violin_cells = [cell for cell in extended.cells if cell.identity.root_column == 0]
+
+    assert extended.spine_count == 5
+    assert [cell.token for cell in violin_cells] == ["2d", ""]
+    assert [cell.source_column for cell in violin_cells] == [0, 1]
+    assert all(cell.editable for cell in violin_cells)
+    assert draft.to_text() == before_view
+
+
+def test_draft_view_keeps_source_numbers_and_describes_new_closing() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+
+    rows = build_draft_fragment_rows(
+        draft,
+        start_line=3,
+        end_line=8,
+        editable_roots={0},
+        helper_roots={2},
+    )
+
+    assert not any(row.source_line == 6 for row in rows)
+    closing = next(row for row in rows if row.description == "nowe: Violin 2")
+    assert closing.source_line is None
+    assert closing.kind is RecordKind.INTERPRETATION
+    assert [cell.token for cell in closing.cells if cell.identity.root_column == 0] == ["*v", "*v"]
+
+    source_row = next(row for row in rows if row.source_line == 7)
+    assert draft.rendered_lines()[source_row.rendered_index].source_line == 7
+
+
+def test_draft_view_keeps_helpers_readonly_and_excludes_other_spines() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+
+    rows = build_draft_fragment_rows(
+        draft,
+        start_line=3,
+        end_line=8,
+        editable_roots={0},
+        helper_roots={2},
+    )
+    cells = [cell for row in rows for cell in row.cells]
+    helpers = [cell for cell in cells if cell.identity.root_column == 2]
+
+    assert helpers
+    assert all(not cell.editable for cell in helpers)
+    assert all(cell.identity.root_column in {0, 2} for cell in cells)

@@ -2343,3 +2343,82 @@ def prepare_merge_reopenings(
         replacements=tuple(sorted(merged.items())),
         proposed_cells=tuple(proposed_cells),
     )
+
+
+@dataclass(frozen=True)
+class DraftFragmentRow:
+    rendered_index: int
+    source_line: int | None
+    description: str
+    kind: RecordKind
+    spine_count: int | None
+    cells: tuple[FragmentCell, ...]
+    global_text: str | None
+
+
+def build_draft_fragment_rows(
+    draft: FragmentDraft,
+    *,
+    start_line: int,
+    end_line: int,
+    editable_roots: set[int],
+    helper_roots: set[int],
+) -> tuple[DraftFragmentRow, ...]:
+    """Przygotuj widok szkicu, zachowując numery pliku źródłowego."""
+    rendered = draft.rendered_lines()
+    records = read_records(draft.to_text())
+    selected_roots = editable_roots | helper_roots
+
+    # Kropki służą wyłącznie ustaleniu tożsamości pustych pól.
+    # W szkicu pola pozostają puste.
+    tracing_lines = [
+        "\t".join(token or "." for token in record.fields)
+        if record.kind is RecordKind.DATA
+        else record.text
+        for record in records
+    ]
+    trace = trace_spines(HumdrumDocument.from_text("\n".join(tracing_lines)))
+    traced_rows = {row.record.line_number: row for row in trace.records}
+    result: list[DraftFragmentRow] = []
+
+    for index, (line, record) in enumerate(zip(rendered, records, strict=True)):
+        reference = line.source_line if line.source_line is not None else line.anchor_line
+        if reference is None or not start_line <= reference <= end_line:
+            continue
+
+        if trace.issue is not None and index + 1 >= trace.issue.line_number:
+            raise HumdrumError(f"Nie można wyświetlić struktury szkicu: {trace.issue.message}")
+
+        cells: list[FragmentCell] = []
+        if record.kind not in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            traced = traced_rows[index + 1]
+            for column, (token, branch) in enumerate(
+                zip(record.fields, traced.branches, strict=True)
+            ):
+                root = branch.identity.root_column
+                if root not in selected_roots:
+                    continue
+
+                cells.append(
+                    FragmentCell(
+                        source_column=column,
+                        identity=branch.identity,
+                        branch_path=branch.path,
+                        token=token,
+                        editable=root in editable_roots,
+                    )
+                )
+
+        result.append(
+            DraftFragmentRow(
+                rendered_index=index,
+                source_line=line.source_line,
+                description=line.description,
+                kind=record.kind,
+                spine_count=record.spine_count,
+                cells=tuple(cells),
+                global_text=(record.text if record.kind is RecordKind.GLOBAL else None),
+            )
+        )
+
+    return tuple(result)
