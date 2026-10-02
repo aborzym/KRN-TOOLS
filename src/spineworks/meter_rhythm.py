@@ -144,6 +144,14 @@ def plan_meter_rests(
     if start == end:
         return ()
 
+    unit = Fraction(1, meter.denominator)
+    for position in (start, end):
+        denominator = (position / unit).denominator
+        if denominator & (denominator - 1):
+            raise HumdrumError(
+                "Zakres pauz obejmuje podział nieregularny — wymaga ręcznego uzupełnienia."
+            )
+
     def make_rest(onset: Fraction, duration: Fraction) -> MeterRest:
         try:
             token = hidden_rest_token(duration)

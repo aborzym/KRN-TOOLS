@@ -253,3 +253,20 @@ def test_rejects_rest_range_outside_measure(
 
     with pytest.raises(HumdrumError, match="Zakres pauz"):
         plan_meter_rests(option, start, end)
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (Fraction(1, 12), Fraction(1, 4)),
+        (Fraction(0), Fraction(1, 12)),
+    ],
+)
+def test_irregular_rest_boundaries_require_manual_fill(
+    start: Fraction,
+    end: Fraction,
+) -> None:
+    option = meter_rest_options(MeterSignature(4, 4))[0]
+
+    with pytest.raises(HumdrumError, match="podział nieregularny"):
+        plan_meter_rests(option, start, end)
