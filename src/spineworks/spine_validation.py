@@ -786,46 +786,32 @@ class FragmentDraft:
         return True
 
     def separate_merges(self, source_line: int) -> bool:
-        if source_line in self._replacements:
-            return False
+        if not any(line == source_line for line, _ in self._editable_cells):
+            raise ValueError("Ta linia nie zawiera edytowalnych pól.")
 
-        # Overlay replacements do not change source coordinates of other rows.
-        source_fields = self._source_lines[source_line - 1].split("\t")
-        fields = source_fields.copy()
+        try:
+            current_line = self.rendered_index(source_line) + 1
+        except ValueError:
+            if source_line in self._replacements:
+                return False
+            raise
 
-        for column in range(len(fields)):
-            fields[column] = self.token(source_line, column)
-
-        candidate_lines = list(self._source_lines)
-        candidate_lines[source_line - 1] = "\t".join(fields)
-        candidate = HumdrumDocument(
-            candidate_lines,
-            self._trailing_newline,
-        )
-        replacement = separate_merge_rows(candidate, source_line)
+        candidate = HumdrumDocument.from_text(self.to_text())
+        replacement = separate_merge_rows(candidate, current_line)
 
         if len(replacement.lines) < 2:
             return False
 
         groups = {identity.root_column for identity in replacement.identities}
-        editable_roots = {
-            column
-            for line, column in self._editable_cells
-            if line == source_line and fields[column] == "*v"
-        }
-        trace = trace_spines(candidate)
-        row = next(item for item in trace.records if item.record.line_number == source_line)
-        permitted_roots = {row.branches[column].identity.root_column for column in editable_roots}
-        if not groups <= permitted_roots:
+        if not groups <= self._editable_roots:
             raise ValueError("Scalenie obejmuje grupę tylko do odczytu.")
 
-        self._remember()
-        self._replacements[source_line] = tuple(
+        new_rows = tuple(
             DraftLine(
                 source_line=None,
                 text=line,
                 description=f"nowe: {identity.instrument or identity.spine_type}",
-                anchor_line=source_line,
+                anchor_line=current_line,
             )
             for identity, line in zip(
                 replacement.identities,
@@ -834,11 +820,7 @@ class FragmentDraft:
             )
         )
 
-        for key in list(self._changes):
-            if key[0] == source_line:
-                del self._changes[key]
-
-        return True
+        return self._apply_candidate_replacements(((current_line, new_rows),))
 
     def _apply_candidate_replacements(
         self,

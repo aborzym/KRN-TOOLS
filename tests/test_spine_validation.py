@@ -2213,3 +2213,60 @@ def test_successive_merge_moves_preserve_fill_and_source_mapping() -> None:
     assert draft.to_text() == before_second
     assert draft.pending_suggestions == ((7, 1), (9, 1))
     assert document.to_text() == draft.original_text
+
+
+def test_separate_merges_after_split_move_preserves_draft_history() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Trumpet\n'
+        "=1\t=1\t=1\n"
+        "4c\tp\t4e\n"
+        "*^\t*\t*^\n"
+        "4d\t4ryy\tf\t4f\t4ryy\n"
+        "*v\t*v\t*\t*v\t*v\n"
+        "=2\t=2\t=2\n"
+        "*-\t*-\t*-\n"
+    )
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    rows = build_fragment_rows(
+        trace,
+        problem,
+        build_measure_view(trace, problem, issues),
+    )
+    draft = FragmentDraft(document, rows)
+
+    draft.move_split(5, 0)
+    draft.propose_token(4, 1, "4ryy")
+    before_separation = draft.to_text()
+
+    assert draft.separate_merges(7) is True
+    assert draft.pending_suggestions == ((4, 1),)
+
+    closing = [
+        line
+        for line in draft.rendered_lines()
+        if line.source_line is None and line.anchor_line == 7
+    ]
+    assert [line.description for line in closing] == [
+        "nowe: Trumpet",
+        "nowe: Violin 2",
+    ]
+    assert [line.text for line in closing] == [
+        "*\t*\t*\t*v\t*v",
+        "*v\t*v\t*\t*",
+    ]
+
+    assert draft.separate_merges(7) is False
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_separation
+    assert draft.pending_suggestions == ((4, 1),)
+
+    assert draft.undo() is True
+    assert draft.pending_suggestions == ()
+
+    assert draft.undo() is True
+    assert draft.to_text() == draft.original_text
+    assert document.to_text() == draft.original_text
