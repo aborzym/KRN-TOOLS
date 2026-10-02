@@ -1,6 +1,6 @@
 import pytest
 
-from spineworks.humdrum import HumdrumDocument
+from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.spine_validation import (
     FragmentDraft,
     RecordKind,
@@ -10,6 +10,7 @@ from spineworks.spine_validation import (
     find_split_issues,
     group_split_issues,
     read_records,
+    separate_merge_rows,
     trace_spines,
     validate_draft,
 )
@@ -630,3 +631,75 @@ def test_draft_validation_does_not_block_on_later_structure_failure() -> None:
     result = validate_draft(draft, start_line=2, end_line=4)
 
     assert result.state is ValidationState.VALID
+
+
+def test_separates_merges_right_to_left_and_preserves_source() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Oboe\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "1c\t1ryy\tp\t1e\t1ryy\n"
+        "*v\t*v\t*\t*v\t*v\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+    original = document.to_text()
+
+    replacement = separate_merge_rows(document, 6)
+
+    assert replacement.source_line == 6
+    assert replacement.lines == (
+        "*\t*\t*\t*v\t*v",
+        "*v\t*v\t*\t*",
+    )
+    assert [identity.instrument for identity in replacement.identities] == [
+        "Oboe",
+        "Violin 2",
+    ]
+    assert document.to_text() == original
+
+    candidate_lines = document.lines.copy()
+    candidate_lines[5:6] = replacement.lines
+    candidate = HumdrumDocument(candidate_lines, document.trailing_newline)
+    trace = trace_spines(candidate)
+
+    assert trace.issue is None
+    assert find_split_issues(trace) == ()
+
+
+def test_separates_three_branch_merge_and_two_branch_merge() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        "=1\t=1\t=1\n"
+        "*^\t*\t*^\n"
+        "*^\t*\t*\t*\t*\n"
+        "1c\t1e\t1g\tp\t1a\t1b\n"
+        "*v\t*v\t*v\t*\t*v\t*v\n"
+        "=2\t=2\t=2\n"
+        "*-\t*-\t*-\n"
+    )
+
+    replacement = separate_merge_rows(document, 6)
+
+    assert replacement.lines == (
+        "*\t*\t*\t*\t*v\t*v",
+        "*v\t*v\t*v\t*\t*",
+    )
+
+
+def test_single_merge_replacement_is_unchanged() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n*^\n1c\t1e\n*v\t*v\n=2\n*-\n")
+
+    replacement = separate_merge_rows(document, 5)
+
+    assert replacement.lines == ("*v\t*v",)
+
+
+def test_refuses_separating_merge_mixed_with_other_interpretations() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n*^\t*\n1c\t1e\t1g\n*v\t*v\t*clefG2\n=2\t=2\n*-\t*-\n"
+    )
+
+    with pytest.raises(HumdrumError, match="wyłącznie scalenia"):
+        separate_merge_rows(document, 5)

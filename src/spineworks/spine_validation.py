@@ -800,3 +800,67 @@ def validate_draft(
         state=ValidationState.VALID,
         messages=("Zakres poprawny według bieżącej kontroli.",),
     )
+
+
+@dataclass(frozen=True)
+class MergeReplacement:
+    source_line: int
+    lines: tuple[str, ...]
+    identities: tuple[SpineIdentity, ...]
+
+
+def separate_merge_rows(
+    document: HumdrumDocument,
+    source_line: int,
+) -> MergeReplacement:
+    """Prepare separate merge rows from right to left without changing the source."""
+    if not 1 <= source_line <= len(document.lines):
+        raise ValueError("Linia scalenia nie istnieje.")
+
+    trace = trace_spines(document)
+    if trace.issue is not None and trace.issue.line_number <= source_line:
+        raise HumdrumError(
+            f"Nie można rozdzielić scaleń: linia {trace.issue.line_number}: {trace.issue.message}"
+        )
+
+    row = next(item for item in trace.records if item.record.line_number == source_line)
+    fields = row.record.fields
+
+    if (
+        row.record.kind is not RecordKind.INTERPRETATION
+        or "*v" not in fields
+        or any(token not in {"*", "*v"} for token in fields)
+    ):
+        raise HumdrumError("Wybrana linia musi zawierać wyłącznie scalenia *v i neutralne *.")
+
+    groups: list[tuple[int, int]] = []
+    column = 0
+
+    while column < len(fields):
+        if fields[column] != "*v":
+            column += 1
+            continue
+
+        end = column + 1
+        while end < len(fields) and fields[end] == "*v":
+            end += 1
+
+        groups.append((column, end))
+        column = end
+
+    width = len(fields)
+    lines: list[str] = []
+    identities: list[SpineIdentity] = []
+
+    for start, end in reversed(groups):
+        replacement = ["*"] * width
+        replacement[start:end] = ["*v"] * (end - start)
+        lines.append("\t".join(replacement))
+        identities.append(row.branches[start].identity)
+        width -= end - start - 1
+
+    return MergeReplacement(
+        source_line=source_line,
+        lines=tuple(lines),
+        identities=tuple(identities),
+    )
