@@ -664,3 +664,87 @@ def build_fragment_rows(
         )
 
     return tuple(result)
+
+
+class FragmentDraft:
+    """Keep token edits separate from the application's document."""
+
+    def __init__(
+        self,
+        document: HumdrumDocument,
+        rows: tuple[FragmentRow, ...],
+    ) -> None:
+        self.original_text = document.to_text()
+        self._source_lines = tuple(document.lines)
+        self._trailing_newline = document.trailing_newline
+        self._editable_cells = {
+            (row.source_line, cell.source_column)
+            for row in rows
+            for cell in row.cells
+            if cell.editable
+        }
+        self._changes: dict[tuple[int, int], str] = {}
+        self._undo: list[dict[tuple[int, int], str]] = []
+
+    @property
+    def dirty(self) -> bool:
+        return bool(self._changes)
+
+    @property
+    def can_undo(self) -> bool:
+        return bool(self._undo)
+
+    def token(self, source_line: int, source_column: int) -> str:
+        key = (source_line, source_column)
+        if key in self._changes:
+            return self._changes[key]
+        return self._source_lines[source_line - 1].split("\t")[source_column]
+
+    def edit_token(
+        self,
+        source_line: int,
+        source_column: int,
+        token: str,
+    ) -> bool:
+        key = (source_line, source_column)
+        if key not in self._editable_cells:
+            raise ValueError("To pole nie jest edytowalne.")
+
+        if any(character in token for character in ("\t", "\n", "\r")):
+            raise ValueError("Jedno pole nie może zawierać tabulatora ani nowej linii.")
+
+        if token == self.token(source_line, source_column):
+            return False
+
+        self._undo.append(self._changes.copy())
+        original = self._source_lines[source_line - 1].split("\t")[source_column]
+
+        if token == original:
+            self._changes.pop(key, None)
+        else:
+            self._changes[key] = token
+
+        return True
+
+    def undo(self) -> bool:
+        if not self._undo:
+            return False
+        self._changes = self._undo.pop()
+        return True
+
+    def to_text(self) -> str:
+        lines = list(self._source_lines)
+        changed_rows: dict[int, list[str]] = {}
+
+        for (source_line, source_column), token in self._changes.items():
+            fields = changed_rows.setdefault(
+                source_line,
+                lines[source_line - 1].split("\t"),
+            )
+            fields[source_column] = token
+
+        for source_line, fields in changed_rows.items():
+            lines[source_line - 1] = "\t".join(fields)
+
+        text = "\n".join(lines)
+        return text + ("\n" if self._trailing_newline else "")

@@ -1,5 +1,8 @@
+import pytest
+
 from spineworks.humdrum import HumdrumDocument
 from spineworks.spine_validation import (
+    FragmentDraft,
     RecordKind,
     build_fragment_rows,
     build_measure_view,
@@ -496,3 +499,84 @@ def test_fragment_preserves_all_rows_counts_and_readonly_helpers() -> None:
     assert after_merge.spine_count == 4
     assert [cell.source_column for cell in after_merge.cells] == [0, 2, 3]
     assert document.to_text() == original
+
+
+def make_test_draft() -> tuple[HumdrumDocument, FragmentDraft]:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Trumpet\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "2c 2e\t2ryy\tp\t2g\t2ryy\n"
+        "*v\t*v\t*\t*\t*\n"
+        "2d\tf\t2a\t2ryy\n"
+        "=46\t=46\t=46\t=46\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    rows = build_fragment_rows(
+        trace,
+        problem,
+        build_measure_view(trace, problem, issues),
+    )
+    return document, FragmentDraft(document, rows)
+
+
+def test_draft_changes_only_selected_token_and_preserves_document() -> None:
+    document, draft = make_test_draft()
+    original = document.to_text()
+
+    assert draft.edit_token(5, 0, "2d 2f") is True
+    assert draft.token(5, 0) == "2d 2f"
+    assert draft.to_text().splitlines()[4] == "2d 2f\t2ryy\tp\t2g\t2ryy"
+    assert document.to_text() == original
+    assert draft.dirty is True
+    assert draft.can_undo is True
+
+    assert draft.undo() is True
+    assert draft.to_text() == original
+    assert draft.dirty is False
+    assert draft.can_undo is False
+
+
+def test_draft_refuses_helper_and_hidden_cells() -> None:
+    _, draft = make_test_draft()
+
+    with pytest.raises(ValueError, match="nie jest edytowalne"):
+        draft.edit_token(5, 3, "2b")
+
+    with pytest.raises(ValueError, match="nie jest edytowalne"):
+        draft.edit_token(5, 2, "ff")
+
+
+def test_draft_allows_empty_token_for_incomplete_manual_edit() -> None:
+    _, draft = make_test_draft()
+
+    assert draft.edit_token(5, 0, "") is True
+    assert draft.to_text().splitlines()[4] == "\t2ryy\tp\t2g\t2ryy"
+
+
+def test_draft_rejects_field_separators_but_accepts_chord_spaces() -> None:
+    _, draft = make_test_draft()
+
+    for token in ("2c\t2e", "2c\n2e", "2c\r2e"):
+        with pytest.raises(ValueError, match="Jedno pole"):
+            draft.edit_token(5, 0, token)
+
+    assert draft.dirty is False
+    assert draft.can_undo is False
+    assert draft.edit_token(5, 0, "2c 2e 2g") is True
+
+
+def test_restoring_original_token_is_itself_undoable() -> None:
+    document, draft = make_test_draft()
+
+    assert draft.edit_token(5, 0, "2d") is True
+    assert draft.edit_token(5, 0, "2c 2e") is True
+    assert draft.dirty is False
+    assert draft.to_text() == document.to_text()
+
+    assert draft.undo() is True
+    assert draft.token(5, 0) == "2d"
