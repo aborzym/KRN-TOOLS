@@ -4,12 +4,14 @@ from spineworks.humdrum import HumdrumDocument
 from spineworks.spine_validation import (
     FragmentDraft,
     RecordKind,
+    ValidationState,
     build_fragment_rows,
     build_measure_view,
     find_split_issues,
     group_split_issues,
     read_records,
     trace_spines,
+    validate_draft,
 )
 
 
@@ -580,3 +582,51 @@ def test_restoring_original_token_is_itself_undoable() -> None:
 
     assert draft.undo() is True
     assert draft.token(5, 0) == "2d"
+
+
+def test_draft_validation_reports_existing_early_merge() -> None:
+    _, draft = make_test_draft()
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+
+    assert result.state is ValidationState.ERROR
+    assert any("Linia 6:" in message for message in result.messages)
+    assert any("po *v występują dane" in message for message in result.messages)
+
+
+def test_draft_validation_reports_empty_edited_field() -> None:
+    _, draft = make_test_draft()
+    draft.edit_token(5, 0, "")
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+
+    assert result.state is ValidationState.ERROR
+    assert any("Linia 5: Puste pole" in message for message in result.messages)
+
+
+def test_draft_validation_ignores_placement_issues_in_other_measures() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n4c\n*^\n2d\t2e\n*v\t*v\n=2\n1f\n=3\n*-\n")
+    draft = FragmentDraft(document, ())
+
+    result = validate_draft(draft, start_line=7, end_line=9)
+
+    assert result.state is ValidationState.VALID
+
+
+def test_draft_validation_blocks_structure_failure_before_range() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n*^\n4c\n=2\t=2\n1d\t1e\n*-\t*-\n")
+    draft = FragmentDraft(document, ())
+
+    result = validate_draft(draft, start_line=5, end_line=7)
+
+    assert result.state is ValidationState.ERROR
+    assert any("Linia 4:" in message for message in result.messages)
+
+
+def test_draft_validation_does_not_block_on_later_structure_failure() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n1c\n=2\n*^\n4d\n")
+    draft = FragmentDraft(document, ())
+
+    result = validate_draft(draft, start_line=2, end_line=4)
+
+    assert result.state is ValidationState.VALID

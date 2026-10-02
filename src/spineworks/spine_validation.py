@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from spineworks.humdrum import HumdrumDocument
+from spineworks.humdrum import HumdrumDocument, HumdrumError
 
 
 class RecordKind(Enum):
@@ -748,3 +748,55 @@ class FragmentDraft:
 
         text = "\n".join(lines)
         return text + ("\n" if self._trailing_newline else "")
+
+
+class ValidationState(Enum):
+    ERROR = "error"
+    VALID = "valid"
+
+
+@dataclass(frozen=True)
+class DraftValidation:
+    state: ValidationState
+    messages: tuple[str, ...]
+
+
+def validate_draft(
+    draft: FragmentDraft,
+    *,
+    start_line: int,
+    end_line: int,
+) -> DraftValidation:
+    """Validate the edited range without requiring unrelated measures to be fixed."""
+    if start_line < 1 or end_line < start_line:
+        raise ValueError("Nieprawidłowy zakres linii do kontroli.")
+
+    try:
+        document = HumdrumDocument.from_text(draft.to_text())
+        trace = trace_spines(document)
+    except HumdrumError as error:
+        return DraftValidation(
+            state=ValidationState.ERROR,
+            messages=(str(error),),
+        )
+
+    messages: list[str] = []
+
+    # A structural failure before the range also makes its identity uncertain.
+    if trace.issue is not None and trace.issue.line_number <= end_line:
+        messages.append(f"Linia {trace.issue.line_number}: {trace.issue.message}")
+
+    for issue in find_split_issues(trace):
+        if start_line <= issue.line_number <= end_line:
+            messages.append(f"Linia {issue.line_number}: {issue.message}")
+
+    if messages:
+        return DraftValidation(
+            state=ValidationState.ERROR,
+            messages=tuple(messages),
+        )
+
+    return DraftValidation(
+        state=ValidationState.VALID,
+        messages=("Zakres poprawny według bieżącej kontroli.",),
+    )
