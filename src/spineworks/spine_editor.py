@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.spine_validation import (
     FragmentDraft,
+    build_draft_fragment_rows,
     build_fragment_rows,
     build_measure_view,
     find_split_issues,
@@ -266,7 +267,9 @@ class SpineEditor(QWidget):
         self.original_draft = FragmentDraft(document, self.rows)
         self._editing = False
 
+        self.button_width = 180
         self.view_button = QPushButton("Edytuj", self)
+        self.view_button.setFixedWidth(self.button_width)
         self.view_button.setObjectName("primaryButton")
         self.view_button.clicked.connect(self._toggle_view)
         title_row.insertWidget(1, self.view_button)
@@ -281,6 +284,19 @@ class SpineEditor(QWidget):
         self._update_validation()
 
     def _show_rows(self) -> None:
+        if self._editing:
+            rows = build_draft_fragment_rows(
+                self.draft,
+                start_line=min(row.source_line for row in self.rows),
+                end_line=max(row.source_line for row in self.rows),
+                editable_roots={
+                    identity.root_column for identity in self.problem.editable_identities
+                },
+                helper_roots={identity.root_column for identity in self.problem.helper_identities},
+            )
+        else:
+            rows = self.rows
+
         identities = sorted(
             (
                 *self.problem.editable_identities,
@@ -299,7 +315,7 @@ class SpineEditor(QWidget):
         for identity in identities:
             root = identity.root_column
             widths[root] = max(
-                (sum(cell.identity.root_column == root for cell in row.cells) for row in self.rows),
+                (sum(cell.identity.root_column == root for cell in row.cells) for row in rows),
                 default=1,
             )
 
@@ -314,7 +330,7 @@ class SpineEditor(QWidget):
         self.table.clearSpans()
         self.table.clear()
         self.table.setColumnCount(column_count)
-        self.table.setRowCount(len(self.rows) + 1)
+        self.table.setRowCount(len(rows) + 1)
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setShowGrid(False)
         delegate = CellGridDelegate(spacers, self.table)
@@ -370,8 +386,9 @@ class SpineEditor(QWidget):
             if widths[root] > 1:
                 self.table.setSpan(0, column, 1, widths[root])
 
-        for table_row, row in enumerate(self.rows, start=1):
-            put(table_row, 0, str(row.source_line))
+        for table_row, row in enumerate(rows, start=1):
+            line_label = str(row.source_line) if row.source_line is not None else row.description
+            put(table_row, 0, line_label)
             put(
                 table_row,
                 1,
@@ -393,30 +410,27 @@ class SpineEditor(QWidget):
             for cell in row.cells:
                 root = cell.identity.root_column
                 offset = offsets.get(root, 0)
-                token = (
-                    self.draft.token(row.source_line, cell.source_column)
-                    if self._editing
-                    else cell.token
-                )
                 put(
                     table_row,
                     starts[root] + offset,
-                    token,
+                    cell.token,
                     editable=cell.editable,
                     muted=root not in editable_roots,
-                    source_cell=(row.source_line, cell.source_column),
+                    source_cell=(
+                        (row.rendered_index, cell.source_column) if self._editing else None
+                    ),
                 )
                 offsets[root] = offset + 1
 
         header = self.table.horizontalHeader()
-        header.setMinimumSectionSize(4)
+        header.setMinimumSectionSize(5)
 
         for column in spacers:
             header.setSectionResizeMode(
                 column,
                 QHeaderView.ResizeMode.Fixed,
             )
-            self.table.setColumnWidth(column, 4)
+            self.table.setColumnWidth(column, 5)
 
             for row in range(self.table.rowCount()):
                 # Komentarz globalny może obejmować kilka grup.
@@ -429,6 +443,7 @@ class SpineEditor(QWidget):
 
         self.table.setHorizontalHeader(SpacerHeader(spacers, self.table))
         header = self.table.horizontalHeader()
+        header.show()
         header.setStyleSheet(
             """
             QHeaderView {
@@ -445,14 +460,14 @@ class SpineEditor(QWidget):
             }
             """
         )
-        header.setMinimumSectionSize(4)
+        header.setMinimumSectionSize(5)
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         for column in spacers:
             header.setSectionResizeMode(
                 column,
                 QHeaderView.ResizeMode.Fixed,
             )
-            self.table.setColumnWidth(column, 4)
+            self.table.setColumnWidth(column, 5)
         metrics = self.table.fontMetrics()
         base_width = metrics.horizontalAdvance("Warstwa 1") + 32
 
@@ -558,6 +573,45 @@ class SpineEditor(QWidget):
             self.table.editItem(item)
 
     def _edit_item(self, item: QTableWidgetItem) -> None:
+        source_cell = item.data(Qt.ItemDataRole.UserRole)
+        if source_cell is None or not self._editing:
+            return
+
+        rendered_index, column = source_cell
+
+        try:
+            self.draft.edit_rendered_token(
+                rendered_index,
+                column,
+                item.text(),
+            )
+        except (ValueError, HumdrumError) as error:
+            previous = self.draft.rendered_lines()[rendered_index].text.split("\t")[column]
+            self.table.blockSignals(True)
+            try:
+                item.setText(previous)
+            finally:
+                self.table.blockSignals(False)
+            self.report.setPlainText(str(error))
+            return
+
+        text = item.text()
+        if text.startswith("!"):
+            color = "#dfa060"
+        elif text in {"*^", "*v"}:
+            color = "#d69ab7"
+        elif text.startswith("*"):
+            color = "#a98bbf"
+        else:
+            color = "#dce7f5"
+
+        self.table.blockSignals(True)
+        try:
+            item.setForeground(QColor(color))
+        finally:
+            self.table.blockSignals(False)
+
+        self._update_validation()
         source_cell = item.data(Qt.ItemDataRole.UserRole)
         if source_cell is None:
             return
