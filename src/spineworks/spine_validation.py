@@ -1163,3 +1163,123 @@ def prepare_merge_extension(
         )
 
     return tuple(extended)
+
+
+@dataclass(frozen=True)
+class ClosingRow:
+    identity: SpineIdentity
+    fields: tuple[str, ...]
+
+
+def prepare_closing_block(
+    document: HumdrumDocument,
+    plan: MergeMovePlan,
+) -> tuple[ClosingRow, ...]:
+    """Combine the moved merge with existing final merges, right to left."""
+    trace = trace_spines(document)
+    if trace.issue is not None:
+        raise HumdrumError(
+            f"Nie można przygotować zamknięć: linia "
+            f"{trace.issue.line_number}: {trace.issue.message}"
+        )
+
+    rows = {row.record.line_number: row for row in trace.records}
+    selected = rows[plan.source_line]
+
+    selected_groups: list[tuple[SpineBranch, ...]] = []
+    column = 0
+
+    while column < len(selected.record.fields):
+        if selected.record.fields[column] != "*v":
+            column += 1
+            continue
+
+        end = column + 1
+        while end < len(selected.record.fields) and selected.record.fields[end] == "*v":
+            end += 1
+
+        group = selected.branches[column:end]
+        if group[0].identity == plan.identity:
+            selected_groups.append(group)
+        column = end
+
+    if len(selected_groups) != 1:
+        raise HumdrumError("Nie można jednoznacznie odnaleźć przenoszonego scalenia.")
+
+    moved_group = selected_groups[0]
+    merged = _merge_branch_group(moved_group)
+    if merged is None or len(moved_group) != plan.branch_count:
+        raise HumdrumError("Przenoszone scalenie nie odpowiada planowi.")
+
+    active = list(rows[plan.closing_block_start].branches)
+    matches = [index for index, branch in enumerate(active) if branch == merged]
+    if len(matches) != 1:
+        raise HumdrumError("Przenoszona gałąź zmieniła strukturę przed końcowym blokiem.")
+
+    insertion = matches[0]
+    active[insertion : insertion + 1] = moved_group
+    pending: list[tuple[SpineBranch, ...]] = [moved_group]
+
+    for line_number in range(plan.closing_block_start, plan.end_barline):
+        row = rows[line_number]
+        record = row.record
+
+        if record.kind in {
+            RecordKind.GLOBAL,
+            RecordKind.LOCAL_COMMENT,
+            RecordKind.EMPTY,
+        }:
+            continue
+
+        if record.kind is not RecordKind.INTERPRETATION or any(
+            token not in {"*", "*v"} for token in record.fields
+        ):
+            raise HumdrumError(f"Linia {line_number}: rekord spoza końcowego bloku scaleń.")
+
+        column = 0
+        while column < len(record.fields):
+            if record.fields[column] != "*v":
+                column += 1
+                continue
+
+            end = column + 1
+            while end < len(record.fields) and record.fields[end] == "*v":
+                end += 1
+
+            pending.append(row.branches[column:end])
+            column = end
+
+    result: list[ClosingRow] = []
+
+    while pending:
+        available: list[tuple[int, int, tuple[SpineBranch, ...]]] = []
+
+        for operation, group in enumerate(pending):
+            for start in range(len(active) - len(group) + 1):
+                if tuple(active[start : start + len(group)]) == group:
+                    available.append((start, operation, group))
+
+        if not available:
+            raise HumdrumError("Nie można ułożyć zamknięć bez zmiany tożsamości gałęzi.")
+
+        start, operation, group = max(
+            available,
+            key=lambda candidate: candidate[0],
+        )
+        merged_group = _merge_branch_group(group)
+        if merged_group is None:
+            raise HumdrumError("Nieprawidłowa grupa w końcowym bloku scaleń.")
+
+        fields = ["*"] * len(active)
+        fields[start : start + len(group)] = ["*v"] * len(group)
+        result.append(
+            ClosingRow(
+                identity=group[0].identity,
+                fields=tuple(fields),
+            )
+        )
+
+        active[start : start + len(group)] = [merged_group]
+        pending.pop(operation)
+
+    return tuple(result)

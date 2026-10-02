@@ -10,6 +10,7 @@ from spineworks.spine_validation import (
     find_split_issues,
     group_split_issues,
     plan_merge_move,
+    prepare_closing_block,
     prepare_merge_extension,
     read_records,
     separate_merge_rows,
@@ -923,3 +924,70 @@ def test_merge_extension_keeps_global_comments_out_of_field_rows() -> None:
     )
 
     assert [row.source_line for row in rows] == [7]
+
+
+def test_closing_block_places_moved_left_merge_after_right_merge() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Oboe\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "2c\t2ryy\tp\t2e\t2ryy\n"
+        "*v\t*v\t*\t*\t*\n"
+        "2d\t.\t2f\t2ryy\n"
+        "*\t*\t*v\t*v\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+    original = document.to_text()
+    plan = plan_merge_move(document, 6, 0)
+
+    closing = prepare_closing_block(document, plan)
+
+    assert [row.identity.instrument for row in closing] == [
+        "Oboe",
+        "Violin 2",
+    ]
+    assert [row.fields for row in closing] == [
+        ("*", "*", "*", "*v", "*v"),
+        ("*v", "*v", "*", "*"),
+    ]
+    assert document.to_text() == original
+
+
+def test_closing_block_places_moved_right_merge_before_left_merge() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Oboe\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "2c\t2ryy\tp\t2e\t2ryy\n"
+        "*\t*\t*\t*v\t*v\n"
+        "2d\t2ryy\t.\t2f\n"
+        "*v\t*v\t*\t*\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+
+    closing = prepare_closing_block(
+        document,
+        plan_merge_move(document, 6, 2),
+    )
+
+    assert [row.identity.instrument for row in closing] == [
+        "Oboe",
+        "Violin 2",
+    ]
+    assert [len(row.fields) for row in closing] == [5, 4]
+
+
+def test_closing_block_without_other_merges() -> None:
+    document = HumdrumDocument.from_text("**kern\n=45\n*^\n2c\t2ryy\n*v\t*v\n2d\n=46\n*-\n")
+
+    closing = prepare_closing_block(
+        document,
+        plan_merge_move(document, 5, 0),
+    )
+
+    assert len(closing) == 1
+    assert closing[0].fields == ("*v", "*v")
