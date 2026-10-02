@@ -15,6 +15,7 @@ from spineworks.spine_validation import (
     build_draft_fragment_rows,
     build_fragment_rows,
     build_measure_view,
+    combine_closing_groups,
     find_split_issues,
     group_split_issues,
     plan_merge_move,
@@ -25,6 +26,7 @@ from spineworks.spine_validation import (
     prepare_merge_move,
     prepare_merge_reopening,
     prepare_merge_reopenings,
+    prepare_preserved_closing_block,
     prepare_split_move,
     read_records,
     separate_merge_rows,
@@ -1049,18 +1051,14 @@ def test_complete_merge_move_preserves_source_mapping_and_comments() -> None:
     assert replacements[8][0].text == "2d\t\tff\t2f\t2ryy"
 
     block = replacements[9]
-    assert [line.description for line in block[:2]] == [
-        "nowe: Oboe",
-        "nowe: Violin 2",
-    ]
+
+    assert [line.source_line for line in block] == [9, 10, 11]
+    assert all(line.description == "" for line in block)
     assert [line.text for line in block] == [
-        "*\t*\t*\t*v\t*v",
-        "*v\t*v\t*\t*",
+        "*v\t*v\t*\t*v\t*v",
         "!\t!\t!LO:TX:t=Test",
         "!!Komentarz globalny",
     ]
-    assert block[2].source_line == 10
-    assert block[3].source_line == 11
     assert replacements[10] == ()
     assert replacements[11] == ()
     assert document.to_text() == original
@@ -2622,3 +2620,152 @@ def test_draft_view_keeps_helpers_readonly_and_excludes_other_spines() -> None:
     assert helpers
     assert all(not cell.editable for cell in helpers)
     assert all(cell.identity.root_column in {0, 2} for cell in cells)
+
+
+@pytest.mark.parametrize("separator_type", ["**dynam", "**kern"])
+def test_combines_closings_separated_by_neutral_spine(
+    separator_type: str,
+) -> None:
+    separator_data = "p" if separator_type == "**dynam" else "1ryy"
+    document = HumdrumDocument.from_text(
+        f"**kern\t{separator_type}\t**kern\n"
+        "=1\t=1\t=1\n"
+        "*^\t*\t*^\n"
+        f"1c\t1e\t{separator_data}\t1g\t1b\n"
+        "*\t*\t*\t*v\t*v\n"
+        "*v\t*v\t*\n"
+        "=2\t=2\t=2\n"
+        "*-\t*-\t*-\n"
+    )
+    original = document.to_text()
+    trace = trace_spines(document)
+    row = next(item for item in trace.records if item.record.line_number == 5)
+
+    combined = combine_closing_groups(
+        row.record.fields,
+        row.branches,
+        row.branches[:2],
+    )
+
+    assert combined == ("*v", "*v", "*", "*v", "*v")
+    assert document.to_text() == original
+
+
+def test_does_not_combine_adjacent_closings_of_different_instruments() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n*^\t*^\n1c\t1e\t1g\t1b\n*\t*\t*v\t*v\n*v\t*v\t*\n=2\t=2\n*-\t*-\n"
+    )
+    trace = trace_spines(document)
+    row = next(item for item in trace.records if item.record.line_number == 5)
+
+    assert (
+        combine_closing_groups(
+            row.record.fields,
+            row.branches,
+            row.branches[:2],
+        )
+        is None
+    )
+
+
+def test_does_not_combine_closing_with_musical_interpretation() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        "=1\t=1\t=1\n"
+        "*^\t*\t*^\n"
+        "1c\t1e\tp\t1g\t1b\n"
+        "*\t*\t*\t*v\t*v\n"
+        "*v\t*v\t*\n"
+        "=2\t=2\t=2\n"
+        "*-\t*-\t*-\n"
+    )
+    trace = trace_spines(document)
+    row = next(item for item in trace.records if item.record.line_number == 5)
+    fields = list(row.record.fields)
+    fields[2] = "*clefG2"
+
+    assert (
+        combine_closing_groups(
+            tuple(fields),
+            row.branches,
+            row.branches[:2],
+        )
+        is None
+    )
+
+
+def test_preserved_closing_combines_with_existing_separated_merge() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Oboe\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "2c\t2ryy\tp\t2e\t2ryy\n"
+        "*v\t*v\t*\t*\t*\n"
+        "2d\t.\t2f\t2ryy\n"
+        "*\t*\t*v\t*v\n"
+        "!\t!\t!Komentarz\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+    original = document.to_text()
+
+    closing = prepare_preserved_closing_block(
+        document,
+        plan_merge_move(document, 6, 0),
+    )
+
+    assert [row.source_line for row in closing] == [8, 9]
+    assert closing[0].text == "*v\t*v\t*\t*v\t*v"
+    assert closing[1].text == "!\t!\t!Komentarz"
+    assert all(row.source_line is not None for row in closing)
+    assert document.to_text() == original
+
+
+def test_preserved_closing_adds_row_when_groups_would_be_adjacent() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        '*I"Violin 2\t*I"Oboe\n'
+        "=45\t=45\n"
+        "*^\t*^\n"
+        "2c\t2ryy\t2e\t2ryy\n"
+        "*v\t*v\t*\t*\n"
+        "2d\t2f\t2ryy\n"
+        "*\t*v\t*v\n"
+        "=46\t=46\n"
+        "*-\t*-\n"
+    )
+
+    closing = prepare_preserved_closing_block(
+        document,
+        plan_merge_move(document, 6, 0),
+    )
+
+    assert [row.source_line for row in closing] == [8, None]
+    assert closing[0].text == "*\t*\t*v\t*v"
+    assert closing[1].text == "*v\t*v\t*"
+    assert closing[1].description == "nowe: Violin 2"
+
+
+def test_preserved_closing_keeps_existing_left_to_right_order() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\t**dynam\t**kern\n"
+        "=45\t=45\t=45\t=45\t=45\n"
+        "*^\t*\t*^\t*\t*^\n"
+        "2c\t2ryy\tp\t2e\t2ryy\tp\t2g\t2ryy\n"
+        "*v\t*v\t*\t*\t*\t*\t*\t*\n"
+        "2d\t.\t2f\t2ryy\t.\t2a\t2ryy\n"
+        "*\t*\t*v\t*v\t*\t*\t*\n"
+        "*\t*\t*\t*\t*v\t*v\n"
+        "=46\t=46\t=46\t=46\t=46\n"
+        "*-\t*-\t*-\t*-\t*-\n"
+    )
+
+    closing = prepare_preserved_closing_block(
+        document,
+        plan_merge_move(document, 5, 0),
+    )
+
+    assert [row.source_line for row in closing] == [7, 8]
+    assert closing[0].text == "*v\t*v\t*\t*v\t*v\t*\t*\t*"
+    assert closing[1].text == document.lines[7]

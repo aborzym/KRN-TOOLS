@@ -200,6 +200,12 @@ def suggest_merge_fill(
 ) -> tuple[TokenSuggestion, ...]:
     """Zaproponuj wypełnienie dodatkowych głosów bez edycji dokumentu."""
     plan = plan_merge_move(document, source_line, root_column)
+
+    document = HumdrumDocument(
+        document.lines[: plan.end_barline],
+        False,
+    )
+
     extension = prepare_merge_extension(document, plan)
     data_rows = tuple(row for row in extension if row.proposed_columns)
 

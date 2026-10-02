@@ -1361,8 +1361,19 @@ def validate_draft(
             messages=missing_messages,
         )
 
+    analysis_end = len(rendered)
+
+    for position in range(current_end - 1, len(rendered)):
+        record = read_records(rendered[position].text)
+        if record and record[0].kind is RecordKind.BARLINE:
+            analysis_end = position + 1
+            break
+
     try:
-        document = HumdrumDocument.from_text(draft.to_text())
+        document = HumdrumDocument(
+            [line.text for line in rendered[:analysis_end]],
+            False,
+        )
         trace = trace_spines(document)
     except HumdrumError as error:
         return DraftValidation(
@@ -1803,7 +1814,7 @@ def prepare_merge_move(
     """Prepare source-mapped replacements without modifying the document."""
     plan = plan_merge_move(document, source_line, root_column)
     extension = prepare_merge_extension(document, plan)
-    closing = prepare_closing_block(document, plan)
+    closing = prepare_preserved_closing_block(document, plan)
     trace = trace_spines(document)
     rows = {row.record.line_number: row for row in trace.records}
 
@@ -1836,71 +1847,10 @@ def prepare_merge_move(
         )
         proposed_cells.extend((row.source_line, column) for column in row.proposed_columns)
 
-    block_lines = [
-        DraftLine(
-            source_line=None,
-            text="\t".join(row.fields),
-            description=f"nowe: {row.identity.instrument or row.identity.spine_type}",
-            anchor_line=plan.closing_block_start,
-        )
-        for row in closing
-    ]
-
-    # After all closing operations, the spine structure matches the source barline.
-    final_branches = rows[plan.end_barline].branches
-    comments: list[DraftLine] = []
+    block_lines = list(closing)
 
     for line_number in range(plan.closing_block_start, plan.end_barline):
-        row = rows[line_number]
-        record = row.record
-
-        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
-            comments.append(
-                DraftLine(
-                    source_line=line_number,
-                    text=record.text,
-                )
-            )
-        elif record.kind is RecordKind.LOCAL_COMMENT:
-            fields = ["!"] * len(final_branches)
-
-            for token, branch in zip(
-                record.fields,
-                row.branches,
-                strict=True,
-            ):
-                if token == "!":
-                    continue
-
-                destinations = [
-                    column
-                    for column, final in enumerate(final_branches)
-                    if final.identity == branch.identity
-                    and branch.path[: len(final.path)] == final.path
-                ]
-                if len(destinations) != 1:
-                    raise HumdrumError(
-                        f"Linia {line_number}: nie można bezpiecznie "
-                        "przypisać komentarza po scaleniu."
-                    )
-
-                destination = destinations[0]
-                if fields[destination] not in {"!", token}:
-                    raise HumdrumError(
-                        f"Linia {line_number}: różne komentarze gałęzi trafiłyby do jednego pola."
-                    )
-                fields[destination] = token
-
-            comments.append(
-                DraftLine(
-                    source_line=line_number,
-                    text="\t".join(fields),
-                )
-            )
-
         replacements[line_number] = ()
-
-    block_lines.extend(comments)
 
     if plan.closing_block_start == plan.end_barline:
         block_lines.append(
@@ -2366,7 +2316,21 @@ def build_draft_fragment_rows(
 ) -> tuple[DraftFragmentRow, ...]:
     """Przygotuj widok szkicu, zachowując numery pliku źródłowego."""
     rendered = draft.rendered_lines()
-    records = read_records(draft.to_text())
+    selected_positions = [
+        index
+        for index, line in enumerate(rendered)
+        if (
+            (reference := (line.source_line if line.source_line is not None else line.anchor_line))
+            is not None
+            and start_line <= reference <= end_line
+        )
+    ]
+
+    if not selected_positions:
+        return ()
+
+    rendered = rendered[: max(selected_positions) + 1]
+    records = read_records("\n".join(line.text for line in rendered))
     selected_roots = editable_roots | helper_roots
 
     # Kropki służą wyłącznie ustaleniu tożsamości pustych pól.
@@ -2422,3 +2386,213 @@ def build_draft_fragment_rows(
         )
 
     return tuple(result)
+
+
+def combine_closing_groups(
+    fields: tuple[str, ...],
+    branches: tuple[SpineBranch, ...],
+    moved_group: tuple[SpineBranch, ...],
+) -> tuple[str, ...] | None:
+    """Dopisz scalenie do wiersza, jeżeli grupy pozostaną poprawne."""
+    if len(fields) != len(branches) or len(moved_group) < 2:
+        raise HumdrumError("Nieprawidłowa struktura wiersza zamknięć.")
+
+    if any(token not in {"*", "*v"} for token in fields):
+        return None
+
+    matches = [
+        start
+        for start in range(len(branches) - len(moved_group) + 1)
+        if branches[start : start + len(moved_group)] == moved_group
+    ]
+    if len(matches) != 1:
+        return None
+
+    start = matches[0]
+    end = start + len(moved_group)
+    if any(token != "*" for token in fields[start:end]):
+        return None
+
+    combined = list(fields)
+    combined[start:end] = ["*v"] * len(moved_group)
+
+    column = 0
+    while column < len(combined):
+        if combined[column] != "*v":
+            column += 1
+            continue
+
+        group_end = column + 1
+        while group_end < len(combined) and combined[group_end] == "*v":
+            group_end += 1
+
+        if _merge_branch_group(branches[column:group_end]) is None:
+            return None
+
+        column = group_end
+
+    return tuple(combined)
+
+
+def prepare_preserved_closing_block(
+    document: HumdrumDocument,
+    plan: MergeMovePlan,
+) -> tuple[DraftLine, ...]:
+    """Dodaj scalenie, zachowując kolejność istniejących zamknięć."""
+    trace = trace_spines(document)
+    if trace.issue is not None:
+        raise HumdrumError(trace.issue.message)
+
+    rows = {row.record.line_number: row for row in trace.records}
+    selected = rows[plan.source_line]
+    columns = [
+        column
+        for column, (token, branch) in enumerate(
+            zip(selected.record.fields, selected.branches, strict=True)
+        )
+        if token == "*v" and branch.identity == plan.identity
+    ]
+    if len(columns) != plan.branch_count or columns != list(range(columns[0], columns[-1] + 1)):
+        raise HumdrumError("Nie można ustalić przenoszonej grupy.")
+
+    moved_group = selected.branches[columns[0] : columns[-1] + 1]
+    parent = _merge_branch_group(moved_group)
+    if parent is None:
+        raise HumdrumError("Nieprawidłowe przenoszone scalenie.")
+
+    block = [rows[number] for number in range(plan.closing_block_start, plan.end_barline)]
+    closing_positions = [
+        index
+        for index, row in enumerate(block)
+        if row.record.kind is RecordKind.INTERPRETATION and "*v" in row.record.fields
+    ]
+
+    def expanded(
+        row: TracedRecord,
+    ) -> tuple[tuple[str, ...], tuple[SpineBranch, ...]] | None:
+        matches = [index for index, branch in enumerate(row.branches) if branch == parent]
+        if len(matches) != 1:
+            return None
+
+        column = matches[0]
+        token = row.record.fields[column]
+        if row.record.kind is RecordKind.LOCAL_COMMENT:
+            fill = "!"
+        elif token == "*":
+            fill = "*"
+        else:
+            return None
+
+        fields = list(row.record.fields)
+        fields[column + 1 : column + 1] = [fill] * (len(moved_group) - 1)
+        branches = list(row.branches)
+        branches[column : column + 1] = moved_group
+        return tuple(fields), tuple(branches)
+
+    def attempt(
+        position: int,
+        *,
+        combine: bool,
+    ) -> tuple[DraftLine, ...] | None:
+        result: list[DraftLine] = []
+        closed = False
+
+        for index in range(len(block) + 1):
+            if index == position and not combine:
+                following = next(
+                    (
+                        row
+                        for row in block[index:]
+                        if row.record.kind not in {RecordKind.GLOBAL, RecordKind.EMPTY}
+                    ),
+                    rows[plan.end_barline],
+                )
+                matches = [
+                    column for column, branch in enumerate(following.branches) if branch == parent
+                ]
+                if len(matches) != 1:
+                    return None
+
+                column = matches[0]
+                branches = list(following.branches)
+                branches[column : column + 1] = moved_group
+                fields = ["*"] * len(branches)
+                fields[column : column + len(moved_group)] = ["*v"] * len(moved_group)
+                anchor = block[index].record.line_number if index < len(block) else plan.end_barline
+                result.append(
+                    DraftLine(
+                        source_line=None,
+                        text="\t".join(fields),
+                        description=(
+                            f"nowe: {plan.identity.instrument or plan.identity.spine_type}"
+                        ),
+                        anchor_line=anchor,
+                    )
+                )
+                closed = True
+
+            if index == len(block):
+                break
+
+            row = block[index]
+            record = row.record
+
+            if closed or record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+                text = record.text
+            else:
+                extension = expanded(row)
+                if extension is None:
+                    return None
+                fields, branches = extension
+
+                if combine and index == position:
+                    combined = combine_closing_groups(
+                        fields,
+                        branches,
+                        moved_group,
+                    )
+                    if combined is None:
+                        return None
+                    fields = combined
+                    closed = True
+
+                text = "\t".join(fields)
+
+            result.append(
+                DraftLine(
+                    source_line=record.line_number,
+                    text=text,
+                )
+            )
+
+        return tuple(result) if closed else None
+
+    # Najpierw wykorzystaj istniejący wiersz bez zmiany jego pozycji.
+    for position in closing_positions:
+        result = attempt(position, combine=True)
+        if result is not None:
+            return result
+
+    # Nowy wiersz: preferuj miejsce zgodne z kolejnością od prawej do lewej.
+    preferred = next(
+        (
+            position
+            for position in closing_positions
+            if any(
+                token == "*v" and branch.identity.root_column < plan.identity.root_column
+                for token, branch in zip(
+                    block[position].record.fields,
+                    block[position].branches,
+                    strict=True,
+                )
+            )
+        ),
+        closing_positions[-1] + 1 if closing_positions else 0,
+    )
+    positions = list(dict.fromkeys([preferred, *range(len(block) + 1)]))
+    for position in positions:
+        result = attempt(position, combine=False)
+        if result is not None:
+            return result
+
+    raise HumdrumError("Nie można dodać scalenia bez zmiany istniejących zamknięć.")

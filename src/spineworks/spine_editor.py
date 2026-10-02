@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+from time import perf_counter
 
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
@@ -8,6 +9,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
@@ -21,6 +23,8 @@ from PySide6.QtWidgets import (
 )
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
+from spineworks.meter_rhythm import meter_rest_options
+from spineworks.spine_rhythm import meter_at_line, suggest_merge_fill
 from spineworks.spine_validation import (
     FragmentDraft,
     build_draft_fragment_rows,
@@ -273,6 +277,13 @@ class SpineEditor(QWidget):
         self.view_button.setObjectName("primaryButton")
         self.view_button.clicked.connect(self._toggle_view)
         title_row.insertWidget(1, self.view_button)
+        self.move_merge_button = QPushButton("Przenieś scalenie", self)
+        self.move_merge_button.setFixedWidth(self.button_width)
+        self.move_merge_button.setObjectName("primaryButton")
+        self.move_merge_button.setToolTip("Przenieś scalenie na koniec taktu.")
+        self.move_merge_button.clicked.connect(self._move_merge)
+        self.move_merge_button.hide()
+        title_row.insertWidget(2, self.move_merge_button)
         self.title_label.setText(f"Takt {self.problem.measure} · zakres 1 z {len(problems)}")
         self._show_rows()
         self.report.setPlainText(
@@ -338,6 +349,8 @@ class SpineEditor(QWidget):
         self.table.setItemDelegate(delegate)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
+        pending_cells = set(self.draft.pending_suggestions) if self._editing else set()
+
         def put(
             row: int,
             column: int,
@@ -345,6 +358,7 @@ class SpineEditor(QWidget):
             *,
             editable: bool = False,
             muted: bool = False,
+            pending: bool = False,
             source_cell: tuple[int, int] | None = None,
         ) -> None:
             item = QTableWidgetItem(text)
@@ -360,8 +374,10 @@ class SpineEditor(QWidget):
 
             if editable:
                 item.setBackground(QColor("#202b40"))
-
-            if text.startswith("!"):
+            if pending:
+                color = "#729f9b"
+                item.setToolTip("Propozycja — oczekuje na zatwierdzenie.")
+            elif text.startswith("!"):
                 color = "#a17c56" if muted else "#dfa060"
             elif text in {"*^", "*v"}:
                 color = "#a4788d" if muted else "#d69ab7"
@@ -416,6 +432,7 @@ class SpineEditor(QWidget):
                     cell.token,
                     editable=cell.editable,
                     muted=root not in editable_roots,
+                    pending=(row.source_line, cell.source_column) in pending_cells,
                     source_cell=(
                         (row.rendered_index, cell.source_column) if self._editing else None
                     ),
@@ -493,6 +510,184 @@ class SpineEditor(QWidget):
                 )
                 self.table.setColumnWidth(column, required_width)
 
+    def _merge_target(self) -> tuple[int, int] | None:
+        rendered = self.draft.rendered_lines()
+
+        for issue in self.problem.issues:
+            if issue.code != "early_merge":
+                continue
+
+            indices = [
+                index
+                for index, line in enumerate(rendered)
+                if line.source_line == issue.line_number
+            ]
+            if len(indices) != 1:
+                continue
+
+            fields = rendered[indices[0]].text.split("\t")
+            if "*v" not in fields:
+                continue
+
+            return (
+                issue.line_number,
+                issue.identities[0].root_column,
+            )
+
+        return None
+
+    def _move_merge(self) -> None:
+        self.move_merge_button.setFocus()
+        target = self._merge_target()
+        if target is None:
+            return
+
+        source_line, root_column = target
+        moved = False
+
+        try:
+            rendered = self.draft.rendered_lines()
+            current_line = self.draft.rendered_index(source_line) + 1
+            candidate = HumdrumDocument.from_text(self.draft.to_text())
+            trace = trace_spines(candidate)
+
+            if trace.issue is not None:
+                raise HumdrumError(trace.issue.message)
+
+            selected = next(row for row in trace.records if row.record.line_number == current_line)
+            identity = next(
+                branch.identity
+                for branch in selected.branches
+                if branch.identity.root_column == root_column
+            )
+
+            rest_option = None
+
+            if identity.spine_type == "**kern":
+                meter = meter_at_line(candidate, current_line, root_column)
+                options = meter_rest_options(meter)
+
+                if len(options) == 1:
+                    rest_option = options[0]
+                else:
+                    labels = [option.label for option in options]
+                    label, accepted = QInputDialog.getItem(
+                        self,
+                        "Podział pauz",
+                        (
+                            f"{identity.instrument or 'Bez nazwy'} — "
+                            f"{meter.numerator}/{meter.denominator}\n"
+                            "Wybierz sposób podziału ukrytych pauz:"
+                        ),
+                        labels,
+                        0,
+                        False,
+                    )
+                    if not accepted:
+                        return
+
+                    rest_option = options[labels.index(label)]
+
+            timing_start = perf_counter()
+            suggestions = suggest_merge_fill(
+                candidate,
+                current_line,
+                root_column,
+                rest_option=rest_option,
+            )
+            print(
+                f"Obliczenie propozycji: {perf_counter() - timing_start:.3f} s",
+                flush=True,
+            )
+
+            tokens: list[tuple[int, int, str]] = []
+
+            for suggestion in suggestions:
+                original_line = rendered[suggestion.source_line - 1].source_line
+                if original_line is None:
+                    raise HumdrumError("Pole propozycji nie ma numeru linii źródłowej.")
+
+                tokens.append(
+                    (
+                        original_line,
+                        suggestion.source_column,
+                        suggestion.token,
+                    )
+                )
+
+            timing_start = perf_counter()
+            proposal = self.draft.move_merge(*target)
+            print(
+                f"Przeniesienie scalenia: {perf_counter() - timing_start:.3f} s",
+                flush=True,
+            )
+            if proposal is None:
+                return
+
+            moved = True
+            timing_start = perf_counter()
+            self.draft.propose_tokens(tuple(tokens))
+            print(
+                f"Wpisanie propozycji: {perf_counter() - timing_start:.3f} s",
+                flush=True,
+            )
+
+        except (ValueError, HumdrumError) as error:
+            if moved:
+                self.draft.undo()
+            self.report.setPlainText(str(error))
+            return
+
+        vertical = self.table.verticalScrollBar().value()
+        horizontal = self.table.horizontalScrollBar().value()
+
+        self.table.blockSignals(True)
+        try:
+            self._show_rows()
+        finally:
+            self.table.blockSignals(False)
+
+        self.table.verticalScrollBar().setValue(vertical)
+        self.table.horizontalScrollBar().setValue(horizontal)
+        self._update_validation()
+        self.move_merge_button.setFocus()
+        target = self._merge_target()
+        if target is None:
+            return
+
+        try:
+            proposal = self.draft.move_merge(*target)
+        except (ValueError, HumdrumError) as error:
+            self.report.setPlainText(str(error))
+            return
+
+        if proposal is None:
+            return
+
+        vertical = self.table.verticalScrollBar().value()
+        horizontal = self.table.horizontalScrollBar().value()
+
+        timing_start = perf_counter()
+        self.table.blockSignals(True)
+        try:
+            self._show_rows()
+        finally:
+            self.table.blockSignals(False)
+
+        self.table.verticalScrollBar().setValue(vertical)
+        self.table.horizontalScrollBar().setValue(horizontal)
+        print(
+            f"Odbudowa tabeli: {perf_counter() - timing_start:.3f} s",
+            flush=True,
+        )
+
+        timing_start = perf_counter()
+        self._update_validation()
+        print(
+            f"Kontrola zakresu: {perf_counter() - timing_start:.3f} s",
+            flush=True,
+        )
+
     def _toggle_view(self) -> None:
         # Zakończ edycję aktywnego pola przed odczytaniem szkicu.
         self.view_button.setFocus()
@@ -504,6 +699,7 @@ class SpineEditor(QWidget):
 
         self._editing = not self._editing
         self.view_button.setText("Pokaż oryginał" if self._editing else "Edytuj")
+        self.move_merge_button.setVisible(self._editing)
 
         self.table.blockSignals(True)
         try:
@@ -612,44 +808,6 @@ class SpineEditor(QWidget):
             self.table.blockSignals(False)
 
         self._update_validation()
-        source_cell = item.data(Qt.ItemDataRole.UserRole)
-        if source_cell is None:
-            return
-
-        source_line, source_column = source_cell
-
-        try:
-            self.draft.edit_token(
-                source_line,
-                source_column,
-                item.text(),
-            )
-        except ValueError as error:
-            self.table.blockSignals(True)
-            try:
-                item.setText(self.draft.token(source_line, source_column))
-            finally:
-                self.table.blockSignals(False)
-            self.report.setPlainText(str(error))
-            return
-
-        text = item.text()
-        if text.startswith("!"):
-            color = "#dfa060"
-        elif text in {"*^", "*v"}:
-            color = "#d69ab7"
-        elif text.startswith("*"):
-            color = "#a98bbf"
-        else:
-            color = "#dce7f5"
-
-        self.table.blockSignals(True)
-        try:
-            item.setForeground(QColor(color))
-        finally:
-            self.table.blockSignals(False)
-
-        self._update_validation()
 
     def _update_validation(self) -> None:
         result = validate_draft(
@@ -658,7 +816,7 @@ class SpineEditor(QWidget):
             end_line=self.problem.end_line,
         )
         self.status_indicator.set_state(result.state)
-
+        self.move_merge_button.setEnabled(self._editing and self._merge_target() is not None)
         instruments = list(
             dict.fromkeys(
                 identity.instrument or "Bez nazwy" for identity in self.problem.editable_identities
