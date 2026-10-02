@@ -986,6 +986,55 @@ class FragmentDraft:
 
         raise ValueError("Nie odnaleziono wiersza szkicu.")
 
+    def propose_token(
+        self,
+        source_line: int,
+        source_column: int,
+        token: str,
+    ) -> bool:
+        if (
+            not token.strip()
+            or any(character in token for character in ("\t", "\n", "\r"))
+            or read_records(token)[0].kind is not RecordKind.DATA
+        ):
+            raise ValueError("Propozycja musi być jednym tokenem danych.")
+
+        rendered = self.rendered_lines()
+        matching = [index for index, line in enumerate(rendered) if line.source_line == source_line]
+        if len(matching) != 1:
+            raise ValueError("Nie można jednoznacznie odnaleźć linii propozycji.")
+
+        row_index = matching[0]
+        record = read_records(rendered[row_index].text)[0]
+        if record.kind is not RecordKind.DATA:
+            raise ValueError("Propozycje wypełnienia dotyczą tylko danych.")
+
+        if not 0 <= source_column < len(record.fields):
+            raise ValueError("Kolumna propozycji nie istnieje.")
+
+        current = record.fields[source_column]
+        if current not in {"", token}:
+            return False
+
+        key = (source_line, source_column)
+        changed = self.edit_rendered_token(row_index, source_column, token)
+
+        if not changed:
+            if key in self._pending_suggestions:
+                return False
+            self._remember()
+
+        self._pending_suggestions.add(key)
+        return True
+
+    def approve_suggestions(self) -> bool:
+        if not self._pending_suggestions:
+            return False
+
+        self._remember()
+        self._pending_suggestions.clear()
+        return True
+
     def rendered_lines(self) -> tuple[DraftLine, ...]:
         result: list[DraftLine] = []
 
@@ -1017,6 +1066,7 @@ class FragmentDraft:
 
 class ValidationState(Enum):
     ERROR = "error"
+    PENDING = "pending"
     VALID = "valid"
 
 
@@ -1092,6 +1142,18 @@ def validate_draft(
         return DraftValidation(
             state=ValidationState.ERROR,
             messages=tuple(messages),
+        )
+
+    pending_messages = tuple(
+        f"Linia {source_line} | kolumna {column + 1}: propozycja oczekuje na zatwierdzenie."
+        for source_line, column in draft.pending_suggestions
+        if start_line <= source_line <= end_line
+    )
+
+    if pending_messages:
+        return DraftValidation(
+            state=ValidationState.PENDING,
+            messages=pending_messages,
         )
 
     return DraftValidation(

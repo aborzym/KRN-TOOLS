@@ -1207,3 +1207,71 @@ def test_missing_data_cells_accept_null_token() -> None:
     draft.edit_rendered_token(row_index, 1, ".")
 
     assert draft.missing_data_cells == ()
+
+
+def test_proposed_token_requires_approval() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+
+    assert draft.propose_token(7, 1, "2ryy") is True
+    assert draft.pending_suggestions == ((7, 1),)
+    assert draft.missing_data_cells == ()
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+    assert result.state is ValidationState.PENDING
+
+    assert draft.approve_suggestions() is True
+    assert draft.pending_suggestions == ()
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+    assert result.state is ValidationState.VALID
+
+
+def test_undo_restores_approval_then_removes_proposed_token() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    before_proposal = draft.to_text()
+
+    draft.propose_token(7, 1, "2ryy")
+    proposed_text = draft.to_text()
+    draft.approve_suggestions()
+
+    assert draft.undo() is True
+    assert draft.to_text() == proposed_text
+    assert draft.pending_suggestions == ((7, 1),)
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_proposal
+    assert draft.pending_suggestions == ()
+
+
+def test_proposal_does_not_overwrite_manual_fill() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    row_index = next(
+        index for index, line in enumerate(draft.rendered_lines()) if line.source_line == 7
+    )
+    draft.edit_rendered_token(row_index, 1, "2r")
+
+    assert draft.propose_token(7, 1, "2ryy") is False
+    assert draft.pending_suggestions == ()
+    assert draft.rendered_lines()[row_index].text.split("\t")[1] == "2r"
+
+
+def test_repeated_proposal_is_noop() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    draft.propose_token(7, 1, "2ryy")
+
+    assert draft.propose_token(7, 1, "2ryy") is False
+
+    assert draft.undo() is True
+    assert draft.pending_suggestions == ()
+    assert draft.missing_data_cells != ()
+
+
+def test_approval_without_proposals_is_noop() -> None:
+    _, draft = make_test_draft()
+
+    assert draft.approve_suggestions() is False
+    assert draft.can_undo is False
