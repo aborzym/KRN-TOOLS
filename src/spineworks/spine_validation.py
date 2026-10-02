@@ -586,3 +586,81 @@ def build_measure_view(
         )
 
     return tuple(slices)
+
+
+@dataclass(frozen=True)
+class FragmentCell:
+    source_column: int
+    identity: SpineIdentity
+    branch_path: tuple[int, ...]
+    token: str
+    editable: bool
+
+
+@dataclass(frozen=True)
+class FragmentRow:
+    source_line: int
+    kind: RecordKind
+    spine_count: int | None
+    cells: tuple[FragmentCell, ...]
+    global_text: str | None
+
+
+def build_fragment_rows(
+    trace: SpineTrace,
+    problem: ProblemRange,
+    view: tuple[MeasureSlice, ...],
+) -> tuple[FragmentRow, ...]:
+    """Project selected spine groups while preserving complete source rows."""
+    if not view:
+        return ()
+
+    first_line = view[0].start_line
+    last_line = view[-1].end_line
+    editable = set(problem.editable_identities)
+    visible = editable | set(problem.helper_identities)
+    result: list[FragmentRow] = []
+
+    for row in trace.records:
+        record = row.record
+        if not first_line <= record.line_number <= last_line:
+            continue
+
+        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            result.append(
+                FragmentRow(
+                    source_line=record.line_number,
+                    kind=record.kind,
+                    spine_count=None,
+                    cells=(),
+                    global_text=record.text,
+                )
+            )
+            continue
+
+        if trace.issue is not None and record.line_number >= trace.issue.line_number:
+            raise ValueError("Nie można wydzielić tokenów z wiersza o niepewnej strukturze.")
+
+        cells = tuple(
+            FragmentCell(
+                source_column=column,
+                identity=branch.identity,
+                branch_path=branch.path,
+                token=token,
+                editable=branch.identity in editable,
+            )
+            for column, (token, branch) in enumerate(zip(record.fields, row.branches, strict=True))
+            if branch.identity in visible
+        )
+
+        result.append(
+            FragmentRow(
+                source_line=record.line_number,
+                kind=record.kind,
+                spine_count=record.spine_count,
+                cells=cells,
+                global_text=None,
+            )
+        )
+
+    return tuple(result)

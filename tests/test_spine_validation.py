@@ -1,6 +1,7 @@
 from spineworks.humdrum import HumdrumDocument
 from spineworks.spine_validation import (
     RecordKind,
+    build_fragment_rows,
     build_measure_view,
     find_split_issues,
     group_split_issues,
@@ -446,3 +447,52 @@ def test_multiple_merges_do_not_pull_in_earlier_opening_measures() -> None:
     assert view[0].start_line == 5
     assert view[0].end_line == 8
     assert view[0].collapsed is False
+
+
+def test_fragment_preserves_all_rows_counts_and_readonly_helpers() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Trumpet\n'
+        "=45\t=45\t=45\n"
+        "!!Komentarz globalny\n"
+        "*^\t*\t*^\n"
+        "!\t!\t!\t!\t!\n"
+        "2c 2e\t2ryy\tp\t2g\t2ryy\n"
+        "*v\t*v\t*\t*\t*\n"
+        "2d\t.\t2a\t2ryy\n"
+        "=46\t=46\t=46\t=46\n"
+        "*-\t*-\t*-\t*-\n"
+    )
+
+    original = document.to_text()
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    view = build_measure_view(trace, problem, issues)
+    fragment = build_fragment_rows(trace, problem, view)
+
+    assert [row.source_line for row in fragment] == list(range(3, 11))
+    assert fragment[1].global_text == "!!Komentarz globalny"
+    assert fragment[1].spine_count is None
+    assert fragment[1].cells == ()
+
+    data_row = next(row for row in fragment if row.source_line == 7)
+    assert data_row.spine_count == 5
+    assert [cell.source_column for cell in data_row.cells] == [0, 1, 3, 4]
+    assert [cell.token for cell in data_row.cells] == [
+        "2c 2e",
+        "2ryy",
+        "2g",
+        "2ryy",
+    ]
+    assert [cell.editable for cell in data_row.cells] == [
+        True,
+        True,
+        False,
+        False,
+    ]
+
+    after_merge = next(row for row in fragment if row.source_line == 9)
+    assert after_merge.spine_count == 4
+    assert [cell.source_column for cell in after_merge.cells] == [0, 2, 3]
+    assert document.to_text() == original
