@@ -3,6 +3,7 @@ from fractions import Fraction
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.kern_rhythm import advance_kern_row, hidden_rest_token
+from spineworks.meter_rhythm import MeterSignature, parse_meter
 from spineworks.spine_validation import (
     RecordKind,
     SpineBranch,
@@ -336,3 +337,49 @@ def suggest_split_fill(
         )
 
     return tuple(suggestions)
+
+
+def meter_at_line(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> MeterSignature:
+    """Odczytaj metrum instrumentu obowiązujące we wskazanej linii."""
+    if not 1 <= source_line <= len(document.lines):
+        raise HumdrumError("Linia odczytu metrum wykracza poza dokument.")
+
+    if not 0 <= root_column < document.spine_count:
+        raise HumdrumError("Nieprawidłowy spine źródłowy.")
+
+    trace = trace_spines(document)
+    if trace.issue is not None and trace.issue.line_number <= source_line:
+        raise HumdrumError(f"Linia {trace.issue.line_number}: {trace.issue.message}")
+
+    meter: MeterSignature | None = None
+
+    for row in trace.records:
+        record = row.record
+        if record.line_number > source_line:
+            break
+        if record.kind is not RecordKind.INTERPRETATION:
+            continue
+
+        found: set[MeterSignature] = set()
+
+        for token, branch in zip(record.fields, row.branches):
+            if branch.identity.root_column != root_column:
+                continue
+            if token.startswith("*M") and token[2:3].isdigit():
+                found.add(parse_meter(token))
+
+        if len(found) > 1:
+            raise HumdrumError(
+                f"Linia {record.line_number}: różne metra w gałęziach tego samego instrumentu."
+            )
+        if found:
+            meter = next(iter(found))
+
+    if meter is None:
+        raise HumdrumError(f"Linia {source_line}: brak metrum dla wskazanego spinu.")
+
+    return meter
