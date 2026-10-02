@@ -6,6 +6,7 @@ from spineworks.spine_rhythm import (
     suggest_split_fill,
 )
 from spineworks.spine_validation import (
+    DraftLine,
     FragmentDraft,
     RecordKind,
     ValidationState,
@@ -1769,3 +1770,70 @@ def test_rendered_index_reports_removed_source_line() -> None:
 
     with pytest.raises(ValueError, match="usunięta lub zastąpiona"):
         draft.rendered_index(5)
+
+
+def test_candidate_line_maps_back_to_source_after_merge_move() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    rendered = draft.rendered_lines()
+
+    mapped = draft._map_candidate_line(
+        DraftLine(source_line=6, text="zmieniony wiersz"),
+        rendered,
+    )
+
+    assert mapped.source_line == 7
+    assert mapped.text == "zmieniony wiersz"
+
+
+def test_candidate_line_preserves_inserted_opening_identity() -> None:
+    _, draft = make_split_test_draft()
+    draft.move_split(5, 0)
+    rendered = draft.rendered_lines()
+    opening_index = next(
+        index
+        for index, line in enumerate(rendered)
+        if line.source_line is None and "otwarcie" in line.description
+    )
+    previous = rendered[opening_index]
+
+    mapped = draft._map_candidate_line(
+        DraftLine(source_line=opening_index + 1, text=previous.text),
+        rendered,
+    )
+
+    assert mapped.source_line is None
+    assert mapped.description == previous.description
+    assert mapped.anchor_line == previous.anchor_line
+
+
+def test_candidate_anchor_maps_to_original_source_line() -> None:
+    _, draft = make_split_test_draft()
+    draft.move_split(5, 0)
+    rendered = draft.rendered_lines()
+    current_line = draft.rendered_index(4) + 1
+
+    mapped = draft._map_candidate_line(
+        DraftLine(
+            source_line=None,
+            text="*\t*\t*",
+            description="nowy wiersz",
+            anchor_line=current_line,
+        ),
+        rendered,
+    )
+
+    assert mapped.source_line is None
+    assert mapped.anchor_line == 4
+    assert mapped.description == "nowy wiersz"
+
+
+def test_candidate_line_rejects_number_outside_draft() -> None:
+    _, draft = make_test_draft()
+    rendered = draft.rendered_lines()
+
+    with pytest.raises(ValueError, match="wykracza"):
+        draft._map_candidate_line(
+            DraftLine(source_line=len(rendered) + 1, text="*"),
+            rendered,
+        )

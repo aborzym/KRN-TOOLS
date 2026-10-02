@@ -840,6 +840,42 @@ class FragmentDraft:
 
         return True
 
+    def _map_candidate_line(
+        self,
+        line: DraftLine,
+        rendered: tuple[DraftLine, ...],
+    ) -> DraftLine:
+        def original_line(number: int) -> DraftLine:
+            if not 1 <= number <= len(rendered):
+                raise ValueError("Numer linii wykracza poza bieżący szkic.")
+            return rendered[number - 1]
+
+        source_line = None
+        anchor_line = None
+        description = line.description
+
+        if line.source_line is not None:
+            previous = original_line(line.source_line)
+            source_line = previous.source_line
+            anchor_line = previous.anchor_line
+            if not description:
+                description = previous.description
+
+        if line.anchor_line is not None:
+            previous_anchor = original_line(line.anchor_line)
+            anchor_line = (
+                previous_anchor.source_line
+                if previous_anchor.source_line is not None
+                else previous_anchor.anchor_line
+            )
+
+        return DraftLine(
+            source_line=source_line,
+            text=line.text,
+            description=description,
+            anchor_line=anchor_line,
+        )
+
     def rendered_index(self, source_line: int) -> int:
         matching = [
             index
