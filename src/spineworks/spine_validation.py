@@ -1119,6 +1119,8 @@ def validate_draft(
     end_line: int,
 ) -> DraftValidation:
     """Validate a source range after mapping it to the current draft."""
+    from spineworks.spine_rhythm import trace_rhythm
+
     if start_line < 1 or end_line < start_line:
         raise ValueError("Nieprawidłowy zakres linii do kontroli.")
 
@@ -1173,6 +1175,11 @@ def validate_draft(
     for issue in find_split_issues(trace):
         if current_start <= issue.line_number <= current_end:
             messages.append(f"{location(issue.line_number)}: {issue.message}")
+
+    if not messages:
+        rhythm = trace_rhythm(document)
+        if rhythm.issue is not None and rhythm.issue.line_number <= current_end:
+            messages.append(f"{location(rhythm.issue.line_number)}: {rhythm.issue.message}")
 
     if messages:
         return DraftValidation(

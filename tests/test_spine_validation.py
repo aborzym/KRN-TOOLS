@@ -1411,3 +1411,38 @@ def test_generated_merge_fill_requires_approval_and_preserves_document() -> None
     # Cofnij przeniesienie scalenia.
     assert draft.undo() is True
     assert draft.to_text() == original
+
+
+def test_draft_validation_rejects_shortened_fill_rest() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    draft.propose_token(7, 1, "4ryy")
+    draft.approve_suggestions()
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+
+    assert result.state is ValidationState.ERROR
+    assert any("różne pozostałe długości" in message for message in result.messages)
+
+
+def test_draft_validation_rejects_null_without_active_duration() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    draft.propose_token(7, 1, ".")
+    draft.approve_suggestions()
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+
+    assert result.state is ValidationState.ERROR
+    assert any("kropka nie kontynuuje" in message for message in result.messages)
+
+
+def test_rhythm_error_takes_priority_over_pending_approval() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    draft.propose_token(7, 1, "4ryy")
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+
+    assert draft.pending_suggestions == ((7, 1),)
+    assert result.state is ValidationState.ERROR
