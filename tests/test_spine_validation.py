@@ -1068,3 +1068,62 @@ def test_complete_non_kern_merge_move_without_existing_closings() -> None:
     ]
     assert replacements[7][0].source_line is None
     assert replacements[7][1].source_line == 7
+
+
+def test_draft_move_merge_is_one_undo_and_preserves_prior_token_edit() -> None:
+    document, draft = make_test_draft()
+    draft.edit_token(7, 0, "2e")
+    before_move = draft.to_text()
+
+    proposal = draft.move_merge(6, 0)
+
+    assert proposal is not None
+    assert proposal.proposed_cells == ((7, 1),)
+    assert draft.dirty is True
+    assert document.to_text() == draft.original_text
+
+    rendered = draft.rendered_lines()
+    assert not any(line.source_line == 6 for line in rendered)
+
+    extended = next(line for line in rendered if line.source_line == 7)
+    assert extended.text == "2e\t\tf\t2a\t2ryy"
+
+    new_closing = next(line for line in rendered if line.description == "nowe: Violin 2")
+    assert new_closing.source_line is None
+    assert new_closing.text == "*v\t*v\t*\t*\t*"
+
+    # The unfilled kern proposal keeps validation red.
+    result = validate_draft(draft, start_line=3, end_line=8)
+    assert result.state is ValidationState.ERROR
+    assert any(message.startswith("Linia 7: Puste pole") for message in result.messages)
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_move
+    assert draft.token(7, 0) == "2e"
+
+    assert draft.undo() is True
+    assert draft.to_text() == document.to_text()
+
+
+def test_draft_refuses_moving_readonly_helper_merge() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n*^\n2c\t2ryy\n*v\t*v\n2d\n=2\n*-\n")
+    draft = FragmentDraft(document, ())
+
+    with pytest.raises(ValueError, match="tylko do odczytu"):
+        draft.move_merge(5, 0)
+
+    assert draft.dirty is False
+    assert draft.can_undo is False
+
+
+def test_draft_move_rejects_second_structural_operation_without_changes() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    before = draft.to_text()
+
+    with pytest.raises(ValueError, match="zmianę strukturalną"):
+        draft.move_merge(6, 0)
+
+    assert draft.to_text() == before
+    assert draft.undo() is True
+    assert draft.to_text() == draft.original_text

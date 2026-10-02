@@ -804,6 +804,69 @@ class FragmentDraft:
 
         return True
 
+    def move_merge(
+        self,
+        source_line: int,
+        root_column: int,
+    ) -> "MergeMoveProposal | None":
+        if self._replacements:
+            raise ValueError(
+                "Szkic zawiera już zmianę strukturalną. "
+                "Łączenie takich operacji nie jest jeszcze obsługiwane."
+            )
+
+        candidate = HumdrumDocument.from_text(self.to_text())
+        trace = trace_spines(candidate)
+
+        if trace.issue is not None:
+            raise HumdrumError(
+                f"Nie można przenieść scalenia: linia "
+                f"{trace.issue.line_number}: {trace.issue.message}"
+            )
+
+        selected = next(
+            (row for row in trace.records if row.record.line_number == source_line),
+            None,
+        )
+        if selected is None:
+            raise ValueError("Linia scalenia nie istnieje.")
+
+        selected_columns = [
+            column
+            for column, (token, branch) in enumerate(
+                zip(
+                    selected.record.fields,
+                    selected.branches,
+                    strict=True,
+                )
+            )
+            if token == "*v" and branch.identity.root_column == root_column
+        ]
+
+        if not selected_columns:
+            raise ValueError("Wybrany spine nie ma scalenia w tej linii.")
+
+        if any((source_line, column) not in self._editable_cells for column in selected_columns):
+            raise ValueError("Scalenie obejmuje grupę tylko do odczytu.")
+
+        proposal = prepare_merge_move(
+            candidate,
+            source_line,
+            root_column,
+        )
+
+        self._undo.append((self._changes.copy(), self._replacements.copy()))
+
+        for replaced_line, replacement in proposal.replacements:
+            self._replacements[replaced_line] = replacement
+
+            # These token edits are already included in the replacement text.
+            for key in list(self._changes):
+                if key[0] == replaced_line:
+                    del self._changes[key]
+
+        return proposal
+
     def rendered_lines(self) -> tuple[DraftLine, ...]:
         result: list[DraftLine] = []
 
