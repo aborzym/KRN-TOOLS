@@ -6,6 +6,7 @@ from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.spine_rhythm import (
     remap_spine_remaining,
     suggest_merge_fill,
+    suggest_split_fill,
     trace_rhythm,
 )
 from spineworks.spine_validation import SpineBranch, SpineIdentity
@@ -321,4 +322,43 @@ def test_merge_fill_proposes_dots_for_non_kern_spine() -> None:
 
     assert [(item.source_line, item.source_column, item.token) for item in suggestions] == [
         (6, 1, "."),
+    ]
+
+
+def test_split_fill_proposes_long_rest_with_continuation() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n2c\t4e\n.\t4f\n*^\t*\n4d\t4ryy\t4g\n*v\t*v\t*\n=2\t=2\n*-\t*-\n"
+    )
+    original = document.to_text()
+
+    suggestions = suggest_split_fill(document, 5, 0)
+
+    assert [(item.source_line, item.source_column, item.token) for item in suggestions] == [
+        (3, 1, "2ryy"),
+        (4, 1, "."),
+    ]
+    assert document.to_text() == original
+
+
+def test_split_fill_preserves_note_continuing_from_previous_measure() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n2c\t4e\n=2\t=2\n.\t4f\n*^\t*\n4g\t4ryy\t4a\n*v\t*v\t*\n=3\t=3\n*-\t*-\n"
+    )
+
+    suggestions = suggest_split_fill(document, 5, 0)
+
+    assert [(item.source_line, item.source_column, item.token) for item in suggestions] == [
+        (4, 1, "."),
+    ]
+
+
+def test_split_fill_proposes_dots_for_non_kern_spine() -> None:
+    document = HumdrumDocument.from_text(
+        "**dynam\t**kern\n=1\t=1\np\t4c\n*^\t*\nf\tff\t4d\n*v\t*v\t*\n=2\t=2\n*-\t*-\n"
+    )
+
+    suggestions = suggest_split_fill(document, 4, 0)
+
+    assert [(item.source_line, item.source_column, item.token) for item in suggestions] == [
+        (3, 1, "."),
     ]

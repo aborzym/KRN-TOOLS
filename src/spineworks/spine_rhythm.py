@@ -8,7 +8,9 @@ from spineworks.spine_validation import (
     SpineBranch,
     StructureIssue,
     plan_merge_move,
+    plan_split_move,
     prepare_merge_extension,
+    prepare_split_move,
     trace_spines,
 )
 
@@ -262,5 +264,75 @@ def suggest_merge_fill(
                     token=token,
                 )
             )
+
+    return tuple(suggestions)
+
+
+def suggest_split_fill(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> tuple[TokenSuggestion, ...]:
+    """Zaproponuj wypełnienie głosu przed pierwotnym *^."""
+    plan = plan_split_move(document, source_line, root_column)
+    proposal = prepare_split_move(document, source_line, root_column)
+
+    if not proposal.proposed_cells:
+        return ()
+
+    if plan.identity.spine_type != "**kern":
+        return tuple(TokenSuggestion(line, column, ".") for line, column in proposal.proposed_cells)
+
+    rhythm = trace_rhythm(document)
+    if rhythm.issue is not None and rhythm.issue.line_number <= source_line:
+        raise HumdrumError(f"Linia {rhythm.issue.line_number}: {rhythm.issue.message}")
+
+    times = {row.line_number: row for row in rhythm.records}
+    structure = trace_spines(document)
+    target = next(row for row in structure.records if row.record.line_number == plan.target_line)
+    column = target.branches.index(plan.branch)
+    target_time = times[plan.target_line]
+    active_until = target_time.onset + target_time.remaining_before[column]
+    original_opening_time = times[source_line].onset
+
+    boundaries = sorted(
+        {times[line].onset for line, _ in proposal.proposed_cells} | {original_opening_time},
+        reverse=True,
+    )
+    suggestions: list[TokenSuggestion] = []
+
+    for line, column in proposal.proposed_cells:
+        timed = times[line]
+
+        if timed.duration == 0 or timed.onset < active_until:
+            token = "."
+        else:
+            token = ""
+            for boundary in boundaries:
+                if boundary <= timed.onset:
+                    continue
+
+                try:
+                    candidate = hidden_rest_token(boundary - timed.onset)
+                except HumdrumError:
+                    continue
+
+                token = candidate
+                active_until = boundary
+                break
+
+            if not token:
+                raise HumdrumError(
+                    f"Linia {line}: nie można zaproponować pauzy "
+                    "przed pierwotnym otwarciem rozdwojenia."
+                )
+
+        suggestions.append(
+            TokenSuggestion(
+                source_line=line,
+                source_column=column,
+                token=token,
+            )
+        )
 
     return tuple(suggestions)

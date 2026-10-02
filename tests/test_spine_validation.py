@@ -1,7 +1,10 @@
 import pytest
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
-from spineworks.spine_rhythm import suggest_merge_fill
+from spineworks.spine_rhythm import (
+    suggest_merge_fill,
+    suggest_split_fill,
+)
 from spineworks.spine_validation import (
     FragmentDraft,
     RecordKind,
@@ -1682,3 +1685,51 @@ def test_draft_split_move_keeps_other_instrument_readonly() -> None:
         draft.edit_rendered_token(row_index, 2, "4g")
 
     assert draft.to_text() == before_edit
+
+
+def test_generated_split_fill_requires_approval() -> None:
+    document, draft = make_split_test_draft()
+    original = document.to_text()
+    suggestions = suggest_split_fill(document, 5, 0)
+
+    draft.move_split(5, 0)
+    draft.propose_tokens(
+        tuple((item.source_line, item.source_column, item.token) for item in suggestions)
+    )
+
+    assert (
+        validate_draft(
+            draft,
+            start_line=3,
+            end_line=8,
+        ).state
+        is ValidationState.PENDING
+    )
+
+    assert draft.approve_suggestions() is True
+    assert (
+        validate_draft(
+            draft,
+            start_line=3,
+            end_line=8,
+        ).state
+        is ValidationState.VALID
+    )
+
+    assert document.to_text() == original
+
+    assert draft.undo() is True
+    assert (
+        validate_draft(
+            draft,
+            start_line=3,
+            end_line=8,
+        ).state
+        is ValidationState.PENDING
+    )
+
+    assert draft.undo() is True
+    assert draft.missing_data_cells != ()
+
+    assert draft.undo() is True
+    assert draft.to_text() == original
