@@ -3,7 +3,7 @@ from fractions import Fraction
 import pytest
 
 from spineworks.humdrum import HumdrumError
-from spineworks.kern_rhythm import kern_duration
+from spineworks.kern_rhythm import hidden_rest_token, kern_duration
 
 
 @pytest.mark.parametrize(
@@ -58,3 +58,37 @@ def test_null_token_has_no_new_duration() -> None:
 def test_rejects_invalid_or_unsupported_rhythm(token: str) -> None:
     with pytest.raises(HumdrumError):
         kern_duration(token)
+
+
+@pytest.mark.parametrize(
+    ("duration", "expected"),
+    [
+        (Fraction(1), "1ryy"),
+        (Fraction(1, 2), "2ryy"),
+        (Fraction(3, 4), "2.ryy"),
+        (Fraction(7, 8), "2..ryy"),
+        (Fraction(1, 6), "6ryy"),
+        (Fraction(2), "0ryy"),
+        (Fraction(4), "00ryy"),
+        (Fraction(3), "0.ryy"),
+    ],
+)
+def test_creates_hidden_rest(
+    duration: Fraction,
+    expected: str,
+) -> None:
+    token = hidden_rest_token(duration)
+
+    assert token == expected
+    assert kern_duration(token) == duration
+
+
+@pytest.mark.parametrize(
+    "duration",
+    [Fraction(0), Fraction(-1, 4), Fraction(5, 8)],
+)
+def test_rejects_duration_unsuitable_for_single_rest(
+    duration: Fraction,
+) -> None:
+    with pytest.raises(HumdrumError):
+        hidden_rest_token(duration)

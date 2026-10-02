@@ -55,3 +55,34 @@ def kern_duration(token: str) -> Fraction | None:
         raise HumdrumError("Składniki akordu mają różne długości rytmiczne.")
 
     return durations[0]
+
+
+def hidden_rest_token(duration: Fraction) -> str:
+    """Zapisz długość jako jedną ukrytą pauzę **kern."""
+    if duration <= 0:
+        raise HumdrumError("Ukryta pauza musi mieć dodatnią długość.")
+
+    for dot_count in range(duration.numerator.bit_length() + 1):
+        dot_factor = Fraction(
+            2 ** (dot_count + 1) - 1,
+            2**dot_count,
+        )
+        base = duration / dot_factor
+
+        if base.numerator == 1:
+            denominator = base.denominator
+            is_binary = denominator & (denominator - 1) == 0
+            if dot_count > 0 and not is_binary:
+                continue
+            reciprocal = str(denominator)
+        elif (
+            base.denominator == 1
+            and base.numerator >= 2
+            and base.numerator & (base.numerator - 1) == 0
+        ):
+            reciprocal = "0" * (base.numerator.bit_length() - 1)
+        else:
+            continue
+
+        return f"{reciprocal}{'.' * dot_count}ryy"
+    raise HumdrumError("Ta długość wymaga kilku ukrytych pauz lub nieobsługiwanego zapisu rytmu.")
