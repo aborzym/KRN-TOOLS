@@ -1837,3 +1837,95 @@ def test_candidate_line_rejects_number_outside_draft() -> None:
             DraftLine(source_line=len(rendered) + 1, text="*"),
             rendered,
         )
+
+
+def test_composed_replacement_uses_original_source_number() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    before = draft.to_text()
+    current_line = draft.rendered_index(7) + 1
+
+    composed, included = draft._compose_replacements(
+        (
+            (
+                current_line,
+                (
+                    DraftLine(
+                        source_line=current_line,
+                        text="2d\t2ryy\tf\t2a\t2ryy",
+                    ),
+                ),
+            ),
+        )
+    )
+
+    assert composed[7][0].source_line == 7
+    assert composed[7][0].text == "2d\t2ryy\tf\t2a\t2ryy"
+    assert included == {7}
+    assert draft.to_text() == before
+
+
+def test_composed_replacement_preserves_previously_inserted_opening() -> None:
+    _, draft = make_split_test_draft()
+    draft.move_split(5, 0)
+    rendered = draft.rendered_lines()
+    current_line = draft.rendered_index(4) + 1
+    opening = rendered[current_line - 2]
+
+    composed, included = draft._compose_replacements(
+        (
+            (
+                current_line,
+                (
+                    DraftLine(
+                        source_line=current_line,
+                        text="4c\t4ryy\t4e",
+                    ),
+                ),
+            ),
+        )
+    )
+
+    assert composed[4][0] == opening
+    assert composed[4][1].source_line == 4
+    assert composed[4][1].text == "4c\t4ryy\t4e"
+    assert composed[5] == ()
+    assert included == {4}
+
+
+def test_composed_replacement_can_remove_previously_inserted_row() -> None:
+    _, draft = make_split_test_draft()
+    draft.move_split(5, 0)
+    rendered = draft.rendered_lines()
+    opening_index = next(
+        index
+        for index, line in enumerate(rendered)
+        if line.source_line is None and "otwarcie" in line.description
+    )
+
+    composed, included = draft._compose_replacements(((opening_index + 1, ()),))
+
+    assert len(composed[4]) == 1
+    assert composed[4][0].source_line == 4
+    assert composed[4][0].text == "4c\t\t4e"
+    assert included == {4}
+
+
+def test_composed_replacement_preserves_unrelated_token_edit() -> None:
+    _, draft = make_test_draft()
+    draft.edit_token(5, 0, "2g 2b")
+    before = draft.to_text()
+
+    composed, included = draft._compose_replacements(
+        (
+            (
+                7,
+                (DraftLine(source_line=7, text="2e\tf\t2a\t2ryy"),),
+            ),
+        )
+    )
+
+    assert 5 not in composed
+    assert included == {7}
+    assert draft.token(5, 0) == "2g 2b"
+    assert draft.to_text() == before

@@ -840,6 +840,66 @@ class FragmentDraft:
 
         return True
 
+    def _compose_replacements(
+        self,
+        replacements: tuple[tuple[int, tuple[DraftLine, ...]], ...],
+    ) -> tuple[dict[int, tuple[DraftLine, ...]], set[int]]:
+        rendered = self.rendered_lines()
+        updates = dict(replacements)
+
+        if len(updates) != len(replacements):
+            raise ValueError("Operacja powtarza numer zastępowanego wiersza.")
+
+        if any(not 1 <= number <= len(rendered) for number in updates):
+            raise ValueError("Zastępowany wiersz wykracza poza bieżący szkic.")
+
+        composed = self._replacements.copy()
+        included_source_lines: set[int] = set()
+        position = 0
+
+        for source_line, original in enumerate(self._source_lines, start=1):
+            previous = self._replacements.get(source_line)
+            count = len(previous) if previous is not None else 1
+            current = rendered[position : position + count]
+            physical_numbers = range(position + 1, position + count + 1)
+
+            if not any(number in updates for number in physical_numbers):
+                position += count
+                continue
+
+            combined: list[DraftLine] = []
+
+            for number, line in zip(
+                physical_numbers,
+                current,
+                strict=True,
+            ):
+                if line.source_line is not None:
+                    included_source_lines.add(line.source_line)
+
+                replacement = updates.get(number)
+                if replacement is None:
+                    combined.append(line)
+                    continue
+
+                for candidate_line in replacement:
+                    mapped = self._map_candidate_line(candidate_line, rendered)
+                    combined.append(mapped)
+                    if mapped.source_line is not None:
+                        included_source_lines.add(mapped.source_line)
+
+            baseline = (DraftLine(source_line=source_line, text=original),)
+            result = tuple(combined)
+
+            if result == baseline:
+                composed.pop(source_line, None)
+            else:
+                composed[source_line] = result
+
+            position += count
+
+        return composed, included_source_lines
+
     def _map_candidate_line(
         self,
         line: DraftLine,
