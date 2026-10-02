@@ -840,6 +840,23 @@ class FragmentDraft:
 
         return True
 
+    def rendered_index(self, source_line: int) -> int:
+        matching = [
+            index
+            for index, line in enumerate(self.rendered_lines())
+            if line.source_line == source_line
+        ]
+
+        if not matching:
+            raise ValueError(
+                f"Linia źródłowa {source_line} została usunięta lub zastąpiona nowymi wierszami."
+            )
+
+        if len(matching) != 1:
+            raise ValueError(f"Linia źródłowa {source_line} występuje w szkicu więcej niż raz.")
+
+        return matching[0]
+
     def move_merge(
         self,
         source_line: int,

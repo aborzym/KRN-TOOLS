@@ -1733,3 +1733,39 @@ def test_generated_split_fill_requires_approval() -> None:
 
     assert draft.undo() is True
     assert draft.to_text() == original
+
+
+def test_rendered_index_maps_source_line_after_merge_move() -> None:
+    _, draft = make_test_draft()
+
+    assert draft.rendered_index(7) == 6
+
+    draft.move_merge(6, 0)
+
+    assert draft.rendered_index(7) == 5
+    assert draft.rendered_lines()[5].source_line == 7
+
+    assert draft.undo() is True
+    assert draft.rendered_index(7) == 6
+
+
+def test_rendered_index_maps_source_line_after_split_move() -> None:
+    _, draft = make_split_test_draft()
+
+    assert draft.rendered_index(4) == 3
+
+    draft.move_split(5, 0)
+
+    assert draft.rendered_index(4) == 4
+    assert draft.rendered_lines()[4].source_line == 4
+
+    assert draft.undo() is True
+    assert draft.rendered_index(4) == 3
+
+
+def test_rendered_index_reports_removed_source_line() -> None:
+    _, draft = make_split_test_draft()
+    draft.move_split(5, 0)
+
+    with pytest.raises(ValueError, match="usunięta lub zastąpiona"):
+        draft.rendered_index(5)
