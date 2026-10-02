@@ -2270,3 +2270,82 @@ def prepare_merge_reopening(
         replacements=tuple(sorted(replacements.items())),
         proposed_cells=tuple(proposed_cells),
     )
+
+
+def prepare_merge_reopenings(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> MergeReopeningProposal:
+    """Połącz kolejne pary *v–*^ do końca bieżącego taktu."""
+    first_plan = plan_merge_reopening(
+        document,
+        source_line,
+        root_column,
+    )
+    trace = trace_spines(document)
+    end_line = next(
+        (
+            row.record.line_number
+            for row in trace.records
+            if row.record.line_number > source_line and row.record.kind is RecordKind.BARLINE
+        ),
+        len(document.lines) + 1,
+    )
+
+    merged: dict[int, tuple[DraftLine, ...]] = {}
+    proposed_cells: list[tuple[int, int]] = []
+    next_allowed_line = source_line
+
+    for row in trace.records:
+        number = row.record.line_number
+        if not next_allowed_line <= number < end_line:
+            continue
+
+        has_merge = any(
+            token == "*v" and branch.identity.root_column == root_column
+            for token, branch in zip(
+                row.record.fields,
+                row.branches,
+                strict=True,
+            )
+        )
+        if not has_merge:
+            continue
+
+        has_later_opening = any(
+            number < later.record.line_number < end_line
+            and any(
+                token == "*^" and branch.identity.root_column == root_column
+                for token, branch in zip(
+                    later.record.fields,
+                    later.branches,
+                    strict=True,
+                )
+            )
+            for later in trace.records
+        )
+        if not has_later_opening:
+            break
+
+        plan = plan_merge_reopening(document, number, root_column)
+        if plan.identity != first_plan.identity or plan.parent.path != first_plan.parent.path:
+            raise HumdrumError("Kolejna para dotyczy innego poziomu rozdwojenia.")
+
+        proposal = prepare_merge_reopening(
+            document,
+            number,
+            root_column,
+        )
+        for replaced_line, replacement in proposal.replacements:
+            if replaced_line in merged:
+                raise HumdrumError("Zakresy łączonych rozdwojeń nakładają się.")
+            merged[replaced_line] = replacement
+
+        proposed_cells.extend(proposal.proposed_cells)
+        next_allowed_line = plan.reopening_line + 1
+
+    return MergeReopeningProposal(
+        replacements=tuple(sorted(merged.items())),
+        proposed_cells=tuple(proposed_cells),
+    )

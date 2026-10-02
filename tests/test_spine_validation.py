@@ -21,6 +21,7 @@ from spineworks.spine_validation import (
     prepare_merge_extension,
     prepare_merge_move,
     prepare_merge_reopening,
+    prepare_merge_reopenings,
     prepare_split_move,
     read_records,
     separate_merge_rows,
@@ -2422,4 +2423,64 @@ def test_merge_reopening_uses_dots_for_non_kern_data() -> None:
     replacements = dict(proposal.replacements)
 
     assert replacements[6][0].text == "ff\t.\t8d"
+    assert proposal.proposed_cells == ((6, 1),)
+
+
+def test_merge_reopenings_combines_all_pairs_and_preserves_final_merge() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "*^\n"
+        "=1\t=1\n"
+        "8c\t8ryy\n"
+        "*v\t*v\n"
+        "8d\n"
+        "*^\n"
+        "8e\t8ryy\n"
+        "*v\t*v\n"
+        "8f\n"
+        "*^\n"
+        "8g\t8ryy\n"
+        "*v\t*v\n"
+        "=2\n"
+        "*-\n"
+    )
+    original = document.to_text()
+
+    proposal = prepare_merge_reopenings(document, 5, 0)
+    replacements = dict(proposal.replacements)
+
+    for source_line in (5, 7, 9, 11):
+        assert replacements[source_line] == ()
+
+    assert replacements[6][0].text == "8d\t"
+    assert replacements[10][0].text == "8f\t"
+    assert proposal.proposed_cells == ((6, 1), (10, 1))
+
+    assert 13 not in replacements
+    assert document.to_text() == original
+
+
+def test_merge_reopenings_does_not_include_pairs_from_next_measure() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "*^\n"
+        "=1\t=1\n"
+        "8c\t8ryy\n"
+        "*v\t*v\n"
+        "8d\n"
+        "*^\n"
+        "8e\t8ryy\n"
+        "=2\t=2\n"
+        "*v\t*v\n"
+        "8f\n"
+        "*^\n"
+        "8g\t8ryy\n"
+        "=3\t=3\n"
+        "*-\t*-\n"
+    )
+
+    proposal = prepare_merge_reopenings(document, 5, 0)
+    replacements = dict(proposal.replacements)
+
+    assert set(replacements) == {5, 6, 7}
     assert proposal.proposed_cells == ((6, 1),)
