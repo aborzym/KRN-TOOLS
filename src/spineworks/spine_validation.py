@@ -840,6 +840,40 @@ class FragmentDraft:
 
         return True
 
+    def _apply_candidate_replacements(
+        self,
+        replacements: tuple[tuple[int, tuple[DraftLine, ...]], ...],
+    ) -> bool:
+        if not replacements:
+            return False
+
+        rendered = self.rendered_lines()
+        composed, included = self._compose_replacements(replacements)
+        updates = dict(replacements)
+        preview: list[DraftLine] = []
+
+        for number, line in enumerate(rendered, start=1):
+            if number in updates:
+                preview.extend(
+                    self._map_candidate_line(candidate, rendered) for candidate in updates[number]
+                )
+            else:
+                preview.append(line)
+
+        preview_lines = tuple(preview)
+        pending = self._remap_pending_suggestions(preview_lines)
+
+        if preview_lines == rendered and pending == self._pending_suggestions:
+            return False
+
+        changes = {key: token for key, token in self._changes.items() if key[0] not in included}
+
+        self._remember()
+        self._changes = changes
+        self._replacements = composed
+        self._pending_suggestions = pending
+        return True
+
     def _remap_pending_suggestions(
         self,
         rendered: tuple[DraftLine, ...],

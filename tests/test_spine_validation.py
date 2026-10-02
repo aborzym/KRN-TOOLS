@@ -2009,3 +2009,79 @@ def test_pending_remapping_rejects_lost_token() -> None:
 
     assert draft.to_text() == before
     assert draft.pending_suggestions == ((4, 1),)
+
+
+def test_applies_two_structural_changes_with_separate_undo_steps() -> None:
+    draft, _ = make_pending_split_preview(1)
+    before_first = draft.to_text()
+    original_pending = draft.pending_suggestions
+
+    candidate = HumdrumDocument.from_text(draft.to_text())
+    first = prepare_split_move(candidate, 5, 0)
+
+    assert draft._apply_candidate_replacements(first.replacements) is True
+    after_first = draft.to_text()
+    assert draft.pending_suggestions == ((4, 2),)
+
+    # Uzupełnij puste pole przed przygotowaniem kolejnej operacji.
+    assert draft.propose_token(4, 1, "4ryy") is True
+    before_second = draft.to_text()
+    assert draft.pending_suggestions == ((4, 1), (4, 2))
+
+    candidate = HumdrumDocument.from_text(draft.to_text())
+    current_line = draft.rendered_index(5) + 1
+    second = prepare_split_move(candidate, current_line, 1)
+
+    assert draft._apply_candidate_replacements(second.replacements) is True
+    assert draft.to_text() != before_second
+    assert draft.pending_suggestions == ((4, 1), (4, 2))
+
+    # Cofnij drugie przeniesienie.
+    assert draft.undo() is True
+    assert draft.to_text() == before_second
+    assert draft.pending_suggestions == ((4, 1), (4, 2))
+
+    # Cofnij propozycję wypełnienia.
+    assert draft.undo() is True
+    assert draft.to_text() == after_first
+    assert draft.pending_suggestions == ((4, 2),)
+
+    # Cofnij pierwsze przeniesienie.
+    assert draft.undo() is True
+    assert draft.to_text() == before_first
+    assert draft.pending_suggestions == original_pending
+
+
+def test_applying_invalid_replacements_preserves_draft_and_history() -> None:
+    _, draft = make_test_draft()
+    draft.edit_token(5, 0, "2g 2b")
+    before = draft.to_text()
+
+    with pytest.raises(ValueError, match="wykracza"):
+        draft._apply_candidate_replacements(
+            (
+                (
+                    len(draft.rendered_lines()) + 1,
+                    (DraftLine(source_line=None, text="*"),),
+                ),
+            )
+        )
+
+    assert draft.to_text() == before
+    assert draft.undo() is True
+    assert draft.to_text() == draft.original_text
+
+
+def test_applying_identical_replacement_is_noop() -> None:
+    _, draft = make_test_draft()
+    line = draft.rendered_lines()[4]
+
+    assert draft._apply_candidate_replacements(((5, (line,)),)) is False
+    assert draft.can_undo is False
+
+
+def test_applying_empty_replacement_group_is_noop() -> None:
+    _, draft = make_test_draft()
+
+    assert draft._apply_candidate_replacements(()) is False
+    assert draft.can_undo is False
