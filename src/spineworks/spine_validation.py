@@ -1076,6 +1076,40 @@ class FragmentDraft:
             proposed_cells=tuple(proposed_cells),
         )
 
+    def join_reopenings(
+        self,
+        source_line: int,
+        root_column: int,
+    ) -> "MergeReopeningProposal | None":
+        if root_column not in self._editable_roots or not any(
+            line == source_line for line, _ in self._editable_cells
+        ):
+            raise ValueError("Scalenie należy do grupy tylko do odczytu.")
+
+        rendered = self.rendered_lines()
+        current_line = self.rendered_index(source_line) + 1
+        candidate = HumdrumDocument.from_text(self.to_text())
+        proposal = prepare_merge_reopenings(
+            candidate,
+            current_line,
+            root_column,
+        )
+
+        proposed_cells: list[tuple[int, int]] = []
+        for number, column in proposal.proposed_cells:
+            original_number = rendered[number - 1].source_line
+            if original_number is None:
+                raise HumdrumError("Pole do uzupełnienia nie ma numeru źródłowego.")
+            proposed_cells.append((original_number, column))
+
+        if not self._apply_candidate_replacements(proposal.replacements):
+            return None
+
+        return MergeReopeningProposal(
+            replacements=proposal.replacements,
+            proposed_cells=tuple(proposed_cells),
+        )
+
     def move_split(
         self,
         source_line: int,

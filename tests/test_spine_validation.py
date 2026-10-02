@@ -2484,3 +2484,60 @@ def test_merge_reopenings_does_not_include_pairs_from_next_measure() -> None:
 
     assert set(replacements) == {5, 6, 7}
     assert proposal.proposed_cells == ((6, 1),)
+
+
+def make_reopening_test_draft() -> tuple[HumdrumDocument, FragmentDraft]:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        '*I"Bassoon\n'
+        "*^\n"
+        "=1\t=1\n"
+        "8c\t8ryy\n"
+        "*v\t*v\n"
+        "8d\n"
+        "*^\n"
+        "8e\t8ryy\n"
+        "*v\t*v\n"
+        "8f\n"
+        "*^\n"
+        "8g\t8ryy\n"
+        "*v\t*v\n"
+        "=2\n"
+        "*-\n"
+    )
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    rows = build_fragment_rows(
+        trace,
+        problem,
+        build_measure_view(trace, problem, issues),
+    )
+    return document, FragmentDraft(document, rows)
+
+
+def test_join_reopenings_is_one_undo_and_preserves_prior_edit() -> None:
+    document, draft = make_reopening_test_draft()
+    draft.edit_token(7, 0, "8a")
+    before_join = draft.to_text()
+
+    proposal = draft.join_reopenings(6, 0)
+
+    assert proposal is not None
+    assert proposal.proposed_cells == ((7, 1), (11, 1))
+
+    rendered = draft.rendered_lines()
+    source_numbers = {line.source_line for line in rendered}
+    for removed in (6, 8, 10, 12):
+        assert removed not in source_numbers
+
+    assert rendered[draft.rendered_index(7)].text == "8a\t"
+    assert rendered[draft.rendered_index(11)].text == "8f\t"
+    assert rendered[draft.rendered_index(14)].text == "*v\t*v"
+    assert document.to_text() == draft.original_text
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_join
+
+    assert draft.undo() is True
+    assert draft.to_text() == draft.original_text
