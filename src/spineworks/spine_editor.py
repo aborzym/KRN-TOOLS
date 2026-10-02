@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QApplication,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
@@ -28,6 +29,7 @@ from spineworks.spine_validation import (
     trace_spines,
     validate_draft,
 )
+from spineworks.status_indicator import StatusIndicator
 from spineworks.theme import SPINEWORKS_STYLE
 
 
@@ -202,7 +204,12 @@ class SpineEditor(QWidget):
 
         self.title_label = QLabel(self)
         self.title_label.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(self.title_label)
+        title_row = QHBoxLayout()
+        title_row.addWidget(self.title_label)
+        title_row.addStretch(1)
+        self.status_indicator = StatusIndicator(self)
+        title_row.addWidget(self.status_indicator)
+        layout.addLayout(title_row)
 
         self.table = QTableWidget(self)
         self.table.setEditTriggers(
@@ -263,6 +270,7 @@ class SpineEditor(QWidget):
             )
         )
         self.table.itemChanged.connect(self._edit_item)
+        self._update_validation()
 
     def _show_rows(self) -> None:
         identities = sorted(
@@ -550,12 +558,23 @@ class SpineEditor(QWidget):
         finally:
             self.table.blockSignals(False)
 
+        self._update_validation()
+
+    def _update_validation(self) -> None:
         result = validate_draft(
             self.draft,
             start_line=self.problem.start_line,
             end_line=self.problem.end_line,
         )
-        self.report.setPlainText("\n".join(result.messages))
+        self.status_indicator.set_state(result.state)
+
+        instruments = list(
+            dict.fromkeys(
+                identity.instrument or "Bez nazwy" for identity in self.problem.editable_identities
+            )
+        )
+        heading = "Do poprawienia: " + ", ".join(instruments)
+        self.report.setPlainText(heading + "\n\n" + "\n".join(result.messages))
 
 
 def main() -> int:
