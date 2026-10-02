@@ -1712,3 +1712,87 @@ def prepare_merge_move(
         replacements=tuple(sorted(replacements.items())),
         proposed_cells=tuple(proposed_cells),
     )
+
+
+@dataclass(frozen=True)
+class SplitMovePlan:
+    source_line: int
+    identity: SpineIdentity
+    branch: SpineBranch
+    target_line: int
+    start_barline: int | None
+
+
+def plan_split_move(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> SplitMovePlan:
+    """Znajdź miejsce otwarcia przed pierwszymi danymi taktu."""
+    trace = trace_spines(document)
+    if trace.issue is not None:
+        raise HumdrumError(f"Linia {trace.issue.line_number}: {trace.issue.message}")
+
+    selected = next(
+        (row for row in trace.records if row.record.line_number == source_line),
+        None,
+    )
+    if selected is None:
+        raise ValueError("Linia rozdwojenia nie istnieje.")
+
+    branches = [
+        branch
+        for token, branch in zip(
+            selected.record.fields,
+            selected.branches,
+            strict=True,
+        )
+        if token == "*^" and branch.identity.root_column == root_column
+    ]
+    if len(branches) != 1:
+        raise HumdrumError("Wybór nie wskazuje jednoznacznie jednego otwarcia rozdwojenia.")
+
+    branch = branches[0]
+    barlines = [
+        row.record.line_number
+        for row in trace.records
+        if row.record.line_number < source_line and row.record.kind is RecordKind.BARLINE
+    ]
+    start_barline = max(barlines) if barlines else None
+
+    candidates = [
+        row
+        for row in trace.records
+        if (start_barline or 0) < row.record.line_number <= source_line
+        and row.record.kind not in {RecordKind.GLOBAL, RecordKind.EMPTY}
+    ]
+
+    first_data = next(
+        (row.record.line_number for row in candidates if row.record.kind is RecordKind.DATA),
+        source_line,
+    )
+
+    # Bez poprzedniej kreski zachowujemy interpretacje nagłówka.
+    lower_bound = first_data if start_barline is None else start_barline + 1
+
+    target = next(
+        (
+            row.record.line_number
+            for row in candidates
+            if lower_bound <= row.record.line_number <= first_data and branch in row.branches
+        ),
+        None,
+    )
+    if target is None:
+        raise HumdrumError(
+            "Nie można przenieść otwarcia przed dane: "
+            "jego gałąź powstaje dopiero po rozpoczęciu taktu."
+        )
+
+    return SplitMovePlan(
+        source_line=source_line,
+        identity=branch.identity,
+        branch=branch,
+        target_line=target,
+        start_barline=start_barline,
+    )

@@ -11,6 +11,7 @@ from spineworks.spine_validation import (
     find_split_issues,
     group_split_issues,
     plan_merge_move,
+    plan_split_move,
     prepare_closing_block,
     prepare_merge_extension,
     prepare_merge_move,
@@ -1446,3 +1447,73 @@ def test_rhythm_error_takes_priority_over_pending_approval() -> None:
 
     assert draft.pending_suggestions == ((7, 1),)
     assert result.state is ValidationState.ERROR
+
+
+def test_split_move_targets_first_data_row() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n4c\n*^\n4d\t4ryy\n*v\t*v\n=2\n*-\n")
+    original = document.to_text()
+
+    plan = plan_split_move(document, 4, 0)
+
+    assert plan.source_line == 4
+    assert plan.target_line == 3
+    assert plan.start_barline == 2
+    assert plan.identity.root_column == 0
+    assert document.to_text() == original
+
+
+def test_split_move_keeps_leading_global_comments_before_opening() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "=1\n"
+        "!!Komentarz globalny\n"
+        "!!!OMD: Allegro\n"
+        "!Komentarz lokalny\n"
+        "*clefG2\n"
+        "4c\n"
+        "*^\n"
+        "4d\t4ryy\n"
+        "*v\t*v\n"
+        "=2\n"
+        "*-\n"
+    )
+
+    plan = plan_split_move(document, 8, 0)
+
+    assert plan.target_line == 5
+    assert plan.start_barline == 2
+
+
+def test_split_move_without_barline_preserves_header() -> None:
+    document = HumdrumDocument.from_text("**kern\n*clefG2\n4c\n*^\n4d\t4ryy\n*v\t*v\n*-\n")
+
+    plan = plan_split_move(document, 4, 0)
+
+    assert plan.target_line == 3
+    assert plan.start_barline is None
+
+
+def test_split_move_already_at_start_targets_its_own_row() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n*^\n4c\t4ryy\n*v\t*v\n=2\n*-\n")
+
+    plan = plan_split_move(document, 3, 0)
+
+    assert plan.target_line == plan.source_line
+
+
+def test_nested_split_move_keeps_parent_opening_first() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n*^\n*^\t*\n4c\t4e\t4g\n*v\t*v\t*v\n=2\n*-\n")
+
+    plan = plan_split_move(document, 4, 0)
+
+    assert plan.branch.path == (0,)
+    assert plan.target_line == 4
+
+
+def test_split_move_rejects_branch_created_after_first_data() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n=1\n4c\n*^\n*^\t*\n4d\t4e\t4g\n*v\t*v\t*v\n=2\n*-\n"
+    )
+
+    with pytest.raises(HumdrumError, match="gałąź powstaje"):
+        plan_split_move(document, 5, 0)
