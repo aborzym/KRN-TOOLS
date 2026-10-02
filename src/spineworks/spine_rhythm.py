@@ -3,7 +3,12 @@ from fractions import Fraction
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.kern_rhythm import advance_kern_row, hidden_rest_token
-from spineworks.meter_rhythm import MeterSignature, parse_meter
+from spineworks.meter_rhythm import (
+    MeterRestOption,
+    MeterSignature,
+    parse_meter,
+    plan_meter_rests,
+)
 from spineworks.spine_validation import (
     RecordKind,
     SpineBranch,
@@ -383,3 +388,51 @@ def meter_at_line(
         raise HumdrumError(f"Linia {source_line}: brak metrum dla wskazanego spinu.")
 
     return meter
+
+
+def _meter_fill_tokens(
+    rows: tuple[TimedRecord, ...],
+    *,
+    option: MeterRestOption,
+    measure_start: Fraction,
+    active_until: Fraction,
+    end_time: Fraction,
+) -> dict[int, str]:
+    """Przypisz pauzy i kropki do istniejących wierszy danych."""
+    tokens = {row.line_number: "." for row in rows}
+    available = tuple(
+        row for row in rows if row.duration > 0 and active_until <= row.onset < end_time
+    )
+
+    if not available:
+        if active_until < end_time:
+            raise HumdrumError("Brak wiersza danych, w którym można rozpocząć pauzę.")
+        return tokens
+
+    silence_start = available[0].onset
+    if silence_start != active_until:
+        raise HumdrumError(
+            "Początek ciszy wypada między wierszami danych — wymaga ręcznego uzupełnienia."
+        )
+
+    rests = plan_meter_rests(
+        option,
+        silence_start - measure_start,
+        end_time - measure_start,
+    )
+
+    rows_at_time: dict[Fraction, TimedRecord] = {}
+    for row in available:
+        rows_at_time.setdefault(row.onset, row)
+
+    for rest in rests:
+        onset = measure_start + rest.onset
+        row = rows_at_time.get(onset)
+        if row is None:
+            raise HumdrumError(
+                "Brak wiersza danych na granicy wymaganej przez "
+                "podział metrum — wymaga ręcznego uzupełnienia."
+            )
+        tokens[row.line_number] = rest.token
+
+    return tokens
