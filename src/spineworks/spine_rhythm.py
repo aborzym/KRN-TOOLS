@@ -81,6 +81,7 @@ class TimedRecord:
     line_number: int
     onset: Fraction
     duration: Fraction
+    remaining_before: tuple[Fraction, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -123,6 +124,7 @@ def trace_rhythm(document: HumdrumDocument) -> RhythmTrace:
                     row.branches,
                 )
 
+            remaining_before = remaining
             elapsed = Fraction(0)
 
             if record.kind is RecordKind.DATA:
@@ -158,7 +160,14 @@ def trace_rhythm(document: HumdrumDocument) -> RhythmTrace:
                 issue=StructureIssue(record.line_number, str(error)),
             )
 
-        timed.append(TimedRecord(record.line_number, current_time, elapsed))
+        timed.append(
+            TimedRecord(
+                line_number=record.line_number,
+                onset=current_time,
+                duration=elapsed,
+                remaining_before=remaining_before,
+            )
+        )
         current_time += elapsed
         previous = row.branches
 

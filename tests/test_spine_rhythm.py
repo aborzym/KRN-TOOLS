@@ -231,3 +231,23 @@ def test_timeline_reports_structure_failure() -> None:
     assert result.issue is not None
     assert result.issue.line_number == 3
     assert "liczba spinów" in result.issue.message
+
+
+def test_timeline_records_remaining_duration_before_merge() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n*^\t*\n2c\t2e\t4g\n*v\t*v\t*\n.\t4a\n*-\t*-\n"
+    )
+
+    result = trace_rhythm(document)
+    rows = {row.line_number: row for row in result.records}
+
+    assert result.issue is None
+    assert rows[4].remaining_before == (
+        Fraction(1, 4),
+        Fraction(1, 4),
+        Fraction(0),
+    )
+    assert rows[5].remaining_before == (
+        Fraction(1, 4),
+        Fraction(0),
+    )
