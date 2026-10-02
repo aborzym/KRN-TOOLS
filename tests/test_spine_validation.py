@@ -9,6 +9,7 @@ from spineworks.spine_validation import (
     build_measure_view,
     find_split_issues,
     group_split_issues,
+    plan_merge_move,
     read_records,
     separate_merge_rows,
     trace_spines,
@@ -816,3 +817,47 @@ def test_source_range_includes_record_shifted_by_inserted_rows() -> None:
     assert draft.undo() is True
     assert draft.undo() is True
     assert draft.to_text() == draft.original_text
+
+
+def test_merge_move_plan_finds_existing_final_closing_block() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Oboe\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "2c\t2ryy\tp\t2e\t2ryy\n"
+        "*v\t*v\t*\t*\t*\n"
+        "2d\t.\t2f\t2ryy\n"
+        "*\t*\t*v\t*v\n"
+        "!Komentarz\t!\t!\n"
+        "!!Komentarz globalny\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+
+    original = document.to_text()
+    plan = plan_merge_move(document, 6, 0)
+
+    assert plan.identity.instrument == "Violin 2"
+    assert plan.branch_count == 2
+    assert plan.end_barline == 11
+    assert plan.closing_block_start == 8
+    assert document.to_text() == original
+
+
+def test_merge_move_plan_without_existing_closing_block() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n=45\n*^\n2c\t2ryy\n*v\t*v\n2d\n!Komentarz\n=46\n*-\n"
+    )
+
+    plan = plan_merge_move(document, 5, 0)
+
+    assert plan.end_barline == 8
+    assert plan.closing_block_start == 8
+
+
+def test_merge_move_plan_refuses_wrong_spine_selection() -> None:
+    document = HumdrumDocument.from_text("**kern\n=45\n*^\n2c\t2ryy\n*v\t*v\n2d\n=46\n*-\n")
+
+    with pytest.raises(HumdrumError, match="Wskaż jedno scalenie"):
+        plan_merge_move(document, 5, 99)

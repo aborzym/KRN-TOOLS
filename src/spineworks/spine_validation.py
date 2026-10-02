@@ -967,3 +967,105 @@ def separate_merge_rows(
         lines=tuple(lines),
         identities=tuple(identities),
     )
+
+
+@dataclass(frozen=True)
+class MergeMovePlan:
+    source_line: int
+    identity: SpineIdentity
+    branch_count: int
+    end_barline: int
+    closing_block_start: int
+
+
+def plan_merge_move(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> MergeMovePlan:
+    """Locate a selected merge and the measure's final closing block."""
+    trace = trace_spines(document)
+    if trace.issue is not None:
+        raise HumdrumError(
+            f"Nie można zaplanować przeniesienia: linia "
+            f"{trace.issue.line_number}: {trace.issue.message}"
+        )
+
+    selected = next(
+        (row for row in trace.records if row.record.line_number == source_line),
+        None,
+    )
+    if selected is None:
+        raise ValueError("Linia scalenia nie istnieje.")
+
+    fields = selected.record.fields
+    if selected.record.kind is not RecordKind.INTERPRETATION or any(
+        token not in {"*", "*v"} for token in fields
+    ):
+        raise HumdrumError("Linia przenoszonego scalenia musi zawierać tylko *v i neutralne *.")
+
+    groups: list[tuple[int, int]] = []
+    column = 0
+    while column < len(fields):
+        if fields[column] != "*v":
+            column += 1
+            continue
+
+        end = column + 1
+        while end < len(fields) and fields[end] == "*v":
+            end += 1
+
+        if selected.branches[column].identity.root_column == root_column:
+            groups.append((column, end))
+        column = end
+
+    if len(groups) != 1:
+        raise HumdrumError("Wskaż jedno scalenie wybranego spinu w tej linii.")
+
+    start, end = groups[0]
+    boundary = next(
+        (
+            row
+            for row in trace.records
+            if row.record.line_number > source_line and row.record.kind is RecordKind.BARLINE
+        ),
+        None,
+    )
+    if boundary is None:
+        raise HumdrumError("Brak końcowej kreski taktu; ten przypadek wymaga osobnej obsługi.")
+
+    closing_start = boundary.record.line_number
+    between = [
+        row
+        for row in trace.records
+        if source_line < row.record.line_number < boundary.record.line_number
+    ]
+
+    for row in reversed(between):
+        record = row.record
+
+        if record.kind in {
+            RecordKind.GLOBAL,
+            RecordKind.LOCAL_COMMENT,
+            RecordKind.EMPTY,
+        }:
+            continue
+
+        is_merge_row = (
+            record.kind is RecordKind.INTERPRETATION
+            and "*v" in record.fields
+            and all(token in {"*", "*v"} for token in record.fields)
+        )
+        if is_merge_row:
+            closing_start = record.line_number
+            continue
+
+        break
+
+    return MergeMovePlan(
+        source_line=source_line,
+        identity=selected.branches[start].identity,
+        branch_count=end - start,
+        end_barline=boundary.record.line_number,
+        closing_block_start=closing_start,
+    )
