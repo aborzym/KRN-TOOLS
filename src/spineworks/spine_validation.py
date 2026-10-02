@@ -691,6 +691,9 @@ class FragmentDraft:
             for cell in row.cells
             if cell.editable
         }
+        self._editable_roots = {
+            cell.identity.root_column for row in rows for cell in row.cells if cell.editable
+        }
         self._changes: dict[tuple[int, int], str] = {}
         self._replacements: dict[int, tuple[DraftLine, ...]] = {}
         self._undo: list[
@@ -866,6 +869,89 @@ class FragmentDraft:
                     del self._changes[key]
 
         return proposal
+
+    def edit_rendered_token(
+        self,
+        row_index: int,
+        column: int,
+        token: str,
+    ) -> bool:
+        rendered = self.rendered_lines()
+        if not 0 <= row_index < len(rendered):
+            raise ValueError("Wiersz szkicu nie istnieje.")
+
+        if any(character in token for character in ("\t", "\n", "\r")):
+            raise ValueError("Jedno pole nie może zawierać tabulatora ani nowej linii.")
+
+        line = rendered[row_index]
+        record = read_records(line.text)[0]
+        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            raise ValueError("Ten wiersz nie zawiera edytowalnych pól spinów.")
+
+        fields = list(record.fields)
+        if not 0 <= column < len(fields):
+            raise ValueError("Kolumna szkicu nie istnieje.")
+
+        # Empty data cells are temporarily represented by dots solely
+        # to trace column identities. The actual draft remains unchanged.
+        tracing_lines: list[str] = []
+        for current in rendered:
+            current_record = read_records(current.text)[0]
+            if current_record.kind is RecordKind.DATA:
+                tracing_lines.append("\t".join(value or "." for value in current_record.fields))
+            else:
+                tracing_lines.append(current.text)
+
+        tracing_document = HumdrumDocument(
+            tracing_lines,
+            self._trailing_newline,
+        )
+        trace = trace_spines(tracing_document)
+        current_line = row_index + 1
+
+        if trace.issue is not None and trace.issue.line_number <= current_line:
+            raise HumdrumError(
+                f"Nie można bezpiecznie ustalić instrumentu tego pola: {trace.issue.message}"
+            )
+
+        traced_row = next(row for row in trace.records if row.record.line_number == current_line)
+        root = traced_row.branches[column].identity.root_column
+        if root not in self._editable_roots:
+            raise ValueError("To pole należy do grupy tylko do odczytu.")
+
+        if fields[column] == token:
+            return False
+
+        # Locate the replacement by its position, not by matching its text.
+        position = 0
+        for source_line in range(1, len(self._source_lines) + 1):
+            replacement = self._replacements.get(source_line)
+
+            if replacement is None:
+                if position == row_index:
+                    return self.edit_token(source_line, column, token)
+                position += 1
+                continue
+
+            if position <= row_index < position + len(replacement):
+                replacement_index = row_index - position
+                fields[column] = token
+
+                updated = list(replacement)
+                updated[replacement_index] = DraftLine(
+                    source_line=line.source_line,
+                    text="\t".join(fields),
+                    description=line.description,
+                    anchor_line=line.anchor_line,
+                )
+
+                self._undo.append((self._changes.copy(), self._replacements.copy()))
+                self._replacements[source_line] = tuple(updated)
+                return True
+
+            position += len(replacement)
+
+        raise ValueError("Nie odnaleziono wiersza szkicu.")
 
     def rendered_lines(self) -> tuple[DraftLine, ...]:
         result: list[DraftLine] = []

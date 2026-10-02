@@ -1127,3 +1127,51 @@ def test_draft_move_rejects_second_structural_operation_without_changes() -> Non
     assert draft.to_text() == before
     assert draft.undo() is True
     assert draft.to_text() == draft.original_text
+
+
+def test_edits_extended_branch_and_undoes_fill_before_move() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+
+    row_index = next(
+        index for index, line in enumerate(draft.rendered_lines()) if line.source_line == 7
+    )
+    before_fill = draft.to_text()
+
+    assert draft.edit_rendered_token(row_index, 1, "2ryy") is True
+    result = validate_draft(draft, start_line=3, end_line=8)
+    assert result.state is ValidationState.VALID
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_fill
+
+    assert draft.undo() is True
+    assert draft.to_text() == draft.original_text
+
+
+def test_extended_row_keeps_helper_cells_readonly() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+
+    row_index = next(
+        index for index, line in enumerate(draft.rendered_lines()) if line.source_line == 7
+    )
+    before = draft.to_text()
+
+    with pytest.raises(ValueError, match="tylko do odczytu"):
+        draft.edit_rendered_token(row_index, 3, "2b")
+
+    assert draft.to_text() == before
+
+
+def test_both_extended_branches_are_editable() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+
+    row_index = next(
+        index for index, line in enumerate(draft.rendered_lines()) if line.source_line == 7
+    )
+
+    assert draft.edit_rendered_token(row_index, 0, "2e 2g") is True
+    assert draft.edit_rendered_token(row_index, 1, "2ryy") is True
+    assert draft.rendered_lines()[row_index].text == "2e 2g\t2ryy\tf\t2a\t2ryy"
