@@ -1929,3 +1929,83 @@ def test_composed_replacement_preserves_unrelated_token_edit() -> None:
     assert included == {7}
     assert draft.token(5, 0) == "2g 2b"
     assert draft.to_text() == before
+
+
+def make_pending_split_preview(
+    column: int,
+) -> tuple[FragmentDraft, tuple[DraftLine, ...]]:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        '*I"Violin 2\t*I"Trumpet\n'
+        "=1\t=1\n"
+        "4ryy\t4e\n"
+        "*^\t*^\n"
+        "4c\t4ryy\t4g\t4ryy\n"
+        "*v\t*v\t*\t*\n"
+        "*\t*v\t*v\n"
+        "=2\t=2\n"
+        "*-\t*-\n"
+    )
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    rows = build_fragment_rows(
+        trace,
+        problem,
+        build_measure_view(trace, problem, issues),
+    )
+    draft = FragmentDraft(document, rows)
+    draft.propose_token(4, column, draft.token(4, column))
+
+    rendered = draft.rendered_lines()
+    proposal = prepare_split_move(document, 5, 0)
+    updates = dict(proposal.replacements)
+    preview: list[DraftLine] = []
+
+    for number, line in enumerate(rendered, start=1):
+        if number in updates:
+            preview.extend(
+                draft._map_candidate_line(candidate, rendered) for candidate in updates[number]
+            )
+        else:
+            preview.append(line)
+
+    return draft, tuple(preview)
+
+
+def test_pending_proposal_moves_with_column_of_its_instrument() -> None:
+    draft, preview = make_pending_split_preview(1)
+
+    mapped = draft._remap_pending_suggestions(preview)
+
+    assert mapped == {(4, 2)}
+    assert draft.pending_suggestions == ((4, 1),)
+
+
+def test_pending_proposal_stays_in_original_left_branch() -> None:
+    draft, preview = make_pending_split_preview(0)
+
+    mapped = draft._remap_pending_suggestions(preview)
+
+    assert mapped == {(4, 0)}
+    assert draft.pending_suggestions == ((4, 0),)
+
+
+def test_pending_remapping_rejects_lost_token() -> None:
+    draft, preview = make_pending_split_preview(1)
+    changed = tuple(
+        DraftLine(
+            source_line=line.source_line,
+            text="4ryy\t\t4f" if line.source_line == 4 else line.text,
+            description=line.description,
+            anchor_line=line.anchor_line,
+        )
+        for line in preview
+    )
+    before = draft.to_text()
+
+    with pytest.raises(HumdrumError, match="utraciłaby"):
+        draft._remap_pending_suggestions(changed)
+
+    assert draft.to_text() == before
+    assert draft.pending_suggestions == ((4, 1),)

@@ -840,6 +840,79 @@ class FragmentDraft:
 
         return True
 
+    def _remap_pending_suggestions(
+        self,
+        rendered: tuple[DraftLine, ...],
+    ) -> set[tuple[int, int]]:
+        if not self._pending_suggestions:
+            return set()
+
+        def traced_rows(
+            lines: tuple[DraftLine, ...],
+        ) -> dict[int, TracedRecord]:
+            texts: list[str] = []
+            for line in lines:
+                record = read_records(line.text)[0]
+                if record.kind is RecordKind.DATA:
+                    texts.append("\t".join(token or "." for token in record.fields))
+                else:
+                    texts.append(line.text)
+
+            trace = trace_spines(HumdrumDocument(texts, self._trailing_newline))
+            records = {row.record.line_number: row for row in trace.records}
+            result: dict[int, TracedRecord] = {}
+
+            for number, line in enumerate(lines, start=1):
+                if line.source_line is None:
+                    continue
+                if trace.issue is not None and number >= trace.issue.line_number:
+                    break
+                if number in records:
+                    result[line.source_line] = records[number]
+
+            return result
+
+        before = traced_rows(self.rendered_lines())
+        after = traced_rows(rendered)
+        mapped: set[tuple[int, int]] = set()
+
+        for source_line, column in self._pending_suggestions:
+            previous = before.get(source_line)
+            current = after.get(source_line)
+            if previous is None or current is None:
+                raise HumdrumError(
+                    f"Linia {source_line}: nie można zachować "
+                    "powiązania niezatwierdzonej propozycji."
+                )
+
+            branch = previous.branches[column]
+            token = previous.record.fields[column]
+            candidates = [
+                index
+                for index, candidate in enumerate(current.branches)
+                if candidate.identity == branch.identity
+                and (
+                    candidate.path[: len(branch.path)] == branch.path
+                    or branch.path[: len(candidate.path)] == candidate.path
+                )
+                and current.record.fields[index] == token
+            ]
+            if not candidates:
+                raise HumdrumError(
+                    f"Linia {source_line}: propozycja utraciłaby powiązanie z właściwym głosem."
+                )
+
+            destination = min(
+                candidates,
+                key=lambda index: (
+                    abs(len(current.branches[index].path) - len(branch.path)),
+                    index,
+                ),
+            )
+            mapped.add((source_line, destination))
+
+        return mapped
+
     def _compose_replacements(
         self,
         replacements: tuple[tuple[int, tuple[DraftLine, ...]], ...],
