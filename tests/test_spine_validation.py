@@ -8,6 +8,8 @@ from spineworks.spine_rhythm import (
 from spineworks.spine_validation import (
     DraftLine,
     FragmentDraft,
+    MeasureSlice,
+    ProblemRange,
     RecordKind,
     ValidationState,
     build_fragment_rows,
@@ -260,9 +262,7 @@ def test_reports_separated_merge_groups() -> None:
     issues = find_split_issues(trace)
 
     assert trace.issue is None
-    assert len(issues) == 1
-    assert issues[0].code == "multiple_merges"
-    assert len(issues[0].identities) == 2
+    assert issues == ()
 
 
 def test_allows_separate_closing_rows_and_final_termination() -> None:
@@ -276,7 +276,7 @@ def test_allows_separate_closing_rows_and_final_termination() -> None:
     assert find_split_issues(trace) == ()
 
 
-def test_detects_closing_left_instrument_before_right_instrument() -> None:
+def test_allows_closing_left_instrument_before_right_instrument() -> None:
     document = HumdrumDocument.from_text(
         "**kern\t**kern\n=1\t=1\n*^\t*^\n1c\t1e\t1g\t1b\n*v\t*v\t*\t*\n*\t*v\t*v\n=2\t=2\n*-\t*-\n"
     )
@@ -285,10 +285,7 @@ def test_detects_closing_left_instrument_before_right_instrument() -> None:
     issues = find_split_issues(trace)
 
     assert trace.issue is None
-    assert len(issues) == 1
-    assert issues[0].code == "merge_order"
-    assert issues[0].line_number == 6
-    assert issues[0].related_lines == (5,)
+    assert issues == ()
 
 
 def test_allows_nested_closings_of_same_root_spine() -> None:
@@ -442,7 +439,7 @@ def test_does_not_fold_intermediate_measure_containing_an_issue() -> None:
     assert all(not item.collapsed for item in view)
 
 
-def test_multiple_merges_do_not_pull_in_earlier_opening_measures() -> None:
+def test_separated_merges_do_not_create_problem_ranges() -> None:
     document = HumdrumDocument.from_text(
         "**kern\t**dynam\t**kern\n"
         "=44\t=44\t=44\n"
@@ -457,16 +454,10 @@ def test_multiple_merges_do_not_pull_in_earlier_opening_measures() -> None:
 
     trace = trace_spines(document)
     issues = find_split_issues(trace)
-    problem = group_split_issues(trace, issues)[0]
-    view = build_measure_view(trace, problem, issues)
 
     assert trace.issue is None
-    assert [issue.code for issue in issues] == ["multiple_merges"]
-    assert len(view) == 1
-    assert view[0].measure == "45"
-    assert view[0].start_line == 5
-    assert view[0].end_line == 8
-    assert view[0].collapsed is False
+    assert issues == ()
+    assert group_split_issues(trace, issues) == ()
 
 
 def test_fragment_preserves_all_rows_counts_and_readonly_helpers() -> None:
@@ -719,6 +710,48 @@ def test_refuses_separating_merge_mixed_with_other_interpretations() -> None:
         separate_merge_rows(document, 5)
 
 
+def make_optional_merge_draft(
+    document: HumdrumDocument,
+) -> FragmentDraft:
+    trace = trace_spines(document)
+    assert trace.issue is None
+
+    merge_row = next(row for row in trace.records if row.record.line_number == 6)
+    identities = tuple(
+        dict.fromkeys(
+            branch.identity
+            for token, branch in zip(
+                merge_row.record.fields,
+                merge_row.branches,
+                strict=True,
+            )
+            if token == "*v"
+        )
+    )
+    end_line = len(document.lines) - 1
+    problem = ProblemRange(
+        measure="45",
+        start_line=3,
+        end_line=end_line,
+        issues=(),
+        editable_identities=identities,
+        helper_identities=(),
+    )
+    rows = build_fragment_rows(
+        trace,
+        problem,
+        (
+            MeasureSlice(
+                measure="45",
+                start_line=3,
+                end_line=end_line,
+                collapsed=False,
+            ),
+        ),
+    )
+    return FragmentDraft(document, rows)
+
+
 def test_draft_separates_merges_with_descriptions_and_one_undo() -> None:
     document = HumdrumDocument.from_text(
         "**kern\t**dynam\t**kern\n"
@@ -730,15 +763,7 @@ def test_draft_separates_merges_with_descriptions_and_one_undo() -> None:
         "=46\t=46\t=46\n"
         "*-\t*-\t*-\n"
     )
-    trace = trace_spines(document)
-    issues = find_split_issues(trace)
-    problem = group_split_issues(trace, issues)[0]
-    rows = build_fragment_rows(
-        trace,
-        problem,
-        build_measure_view(trace, problem, issues),
-    )
-    draft = FragmentDraft(document, rows)
+    draft = make_optional_merge_draft(document)
 
     draft.edit_token(5, 0, "1d")
     before_operation = draft.to_text()
@@ -783,15 +808,7 @@ def make_merge_mapping_draft(
         "=46\t=46\t=46\n"
         "*-\t*-\t*-\n"
     )
-    trace = trace_spines(document)
-    issues = find_split_issues(trace)
-    problem = group_split_issues(trace, issues)[0]
-    rows = build_fragment_rows(
-        trace,
-        problem,
-        build_measure_view(trace, problem, issues),
-    )
-    return FragmentDraft(document, rows)
+    return make_optional_merge_draft(document)
 
 
 def test_validates_source_range_after_inserting_merge_rows() -> None:
