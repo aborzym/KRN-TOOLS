@@ -1123,12 +1123,12 @@ def test_draft_refuses_moving_readonly_helper_merge() -> None:
     assert draft.can_undo is False
 
 
-def test_draft_move_rejects_second_structural_operation_without_changes() -> None:
+def test_draft_merge_move_rejects_removed_source_line_without_changes() -> None:
     _, draft = make_test_draft()
     draft.move_merge(6, 0)
     before = draft.to_text()
 
-    with pytest.raises(ValueError, match="zmianę strukturalną"):
+    with pytest.raises(ValueError, match="usunięta lub zastąpiona"):
         draft.move_merge(6, 0)
 
     assert draft.to_text() == before
@@ -2142,3 +2142,74 @@ def test_move_split_reports_source_row_removed_by_previous_operation() -> None:
     assert draft.to_text() == before
     assert draft.undo() is True
     assert draft.to_text() == draft.original_text
+
+
+def test_successive_merge_moves_preserve_fill_and_source_mapping() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        '*I"Violin 2\t*I"Trumpet\n'
+        "=1\t=1\n"
+        "*^\t*^\n"
+        "4c\t4ryy\t4e\t4ryy\n"
+        "*v\t*v\t*\t*\n"
+        "4d\t4f\t4ryy\n"
+        "*\t*v\t*v\n"
+        "4e\t4g\n"
+        "=2\t=2\n"
+        "*-\t*-\n"
+    )
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    rows = build_fragment_rows(
+        trace,
+        problem,
+        build_measure_view(trace, problem, issues),
+    )
+    draft = FragmentDraft(document, rows)
+
+    first = draft.move_merge(6, 0)
+    assert first is not None
+    draft.propose_tokens(
+        (
+            (7, 1, "2ryy"),
+            (9, 1, "."),
+        )
+    )
+    before_second = draft.to_text()
+
+    second = draft.move_merge(8, 1)
+    assert second is not None
+    assert second.proposed_cells == ((9, 3),)
+    assert draft.pending_suggestions == ((7, 1), (9, 1))
+
+    row = draft.rendered_lines()[draft.rendered_index(9)]
+    assert row.text == "4e\t.\t4g\t"
+
+    draft.propose_token(9, 3, "4ryy")
+    assert (
+        validate_draft(
+            draft,
+            start_line=3,
+            end_line=10,
+        ).state
+        is ValidationState.PENDING
+    )
+
+    draft.approve_suggestions()
+    assert (
+        validate_draft(
+            draft,
+            start_line=3,
+            end_line=10,
+        ).state
+        is ValidationState.VALID
+    )
+
+    # Cofnij zatwierdzenie, drugie wypełnienie i drugie przeniesienie.
+    assert draft.undo() is True
+    assert draft.undo() is True
+    assert draft.undo() is True
+    assert draft.to_text() == before_second
+    assert draft.pending_suggestions == ((7, 1), (9, 1))
+    assert document.to_text() == draft.original_text
