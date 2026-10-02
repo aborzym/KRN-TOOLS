@@ -1069,3 +1069,97 @@ def plan_merge_move(
         end_barline=boundary.record.line_number,
         closing_block_start=closing_start,
     )
+
+
+@dataclass(frozen=True)
+class ExtendedRow:
+    source_line: int
+    fields: tuple[str, ...]
+    proposed_columns: tuple[int, ...]
+
+
+def prepare_merge_extension(
+    document: HumdrumDocument,
+    plan: MergeMovePlan,
+) -> tuple[ExtendedRow, ...]:
+    """Propose extra branch fields before the final closing block."""
+    trace = trace_spines(document)
+    if trace.issue is not None:
+        raise HumdrumError(
+            f"Nie można rozszerzyć gałęzi: linia {trace.issue.line_number}: {trace.issue.message}"
+        )
+
+    opening_row = next(row for row in trace.records if row.record.line_number == plan.source_line)
+    fields = opening_row.record.fields
+    groups: list[tuple[int, int]] = []
+    column = 0
+
+    while column < len(fields):
+        if fields[column] != "*v":
+            column += 1
+            continue
+
+        end = column + 1
+        while end < len(fields) and fields[end] == "*v":
+            end += 1
+
+        if opening_row.branches[column].identity == plan.identity:
+            groups.append((column, end))
+        column = end
+
+    if len(groups) != 1:
+        raise HumdrumError("Plan nie wskazuje jednoznacznego scalenia.")
+
+    start, end = groups[0]
+    merged = _merge_branch_group(opening_row.branches[start:end])
+    if merged is None or end - start != plan.branch_count:
+        raise HumdrumError("Struktura scalenia nie odpowiada planowi.")
+
+    additions = plan.branch_count - 1
+    extended: list[ExtendedRow] = []
+
+    for row in trace.records:
+        record = row.record
+        if not plan.source_line < record.line_number < plan.closing_block_start:
+            continue
+
+        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            continue
+
+        matching = [index for index, branch in enumerate(row.branches) if branch == merged]
+        if len(matching) != 1:
+            raise HumdrumError(
+                f"Linia {record.line_number}: gałąź zmieniła strukturę przed miejscem docelowym."
+            )
+        column = matching[0]
+        token = record.fields[column]
+
+        if record.kind is RecordKind.DATA:
+            fill = "" if plan.identity.spine_type == "**kern" else "."
+            proposed = tuple(range(column + 1, column + 1 + additions))
+        elif record.kind is RecordKind.LOCAL_COMMENT:
+            fill = "!"
+            proposed = ()
+        elif record.kind is RecordKind.INTERPRETATION:
+            if token in {"*^", "*v", "*x", "*+", "*-"}:
+                raise HumdrumError(
+                    f"Linia {record.line_number}: kolejna operacja "
+                    "strukturalna w rozszerzanej gałęzi."
+                )
+            # Preserve common musical settings in every extended branch.
+            fill = token
+            proposed = ()
+        else:
+            raise HumdrumError(f"Nieoczekiwany rekord w rozszerzeniu — linia {record.line_number}.")
+
+        new_fields = list(record.fields)
+        new_fields[column + 1 : column + 1] = [fill] * additions
+        extended.append(
+            ExtendedRow(
+                source_line=record.line_number,
+                fields=tuple(new_fields),
+                proposed_columns=proposed,
+            )
+        )
+
+    return tuple(extended)

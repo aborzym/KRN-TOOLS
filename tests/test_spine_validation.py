@@ -10,6 +10,7 @@ from spineworks.spine_validation import (
     find_split_issues,
     group_split_issues,
     plan_merge_move,
+    prepare_merge_extension,
     read_records,
     separate_merge_rows,
     trace_spines,
@@ -861,3 +862,64 @@ def test_merge_move_plan_refuses_wrong_spine_selection() -> None:
 
     with pytest.raises(HumdrumError, match="Wskaż jedno scalenie"):
         plan_merge_move(document, 5, 99)
+
+
+def test_merge_extension_preserves_tokens_and_other_columns() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Oboe\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "2c\t2ryy\tp\t2e\t2ryy\n"
+        "*v\t*v\t*\t*\t*\n"
+        "!LO:S:color=red\t!\t!\t!\n"
+        "*clefG2\t*\t*\t*\n"
+        "2d 2f\tff\t2g\t2ryy\n"
+        "*\t*\t*v\t*v\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+    original = document.to_text()
+    plan = plan_merge_move(document, 6, 0)
+
+    rows = prepare_merge_extension(document, plan)
+
+    assert [row.source_line for row in rows] == [7, 8, 9]
+    assert rows[0].fields == (
+        "!LO:S:color=red",
+        "!",
+        "!",
+        "!",
+        "!",
+    )
+    assert rows[1].fields == ("*clefG2", "*clefG2", "*", "*", "*")
+    assert rows[2].fields == ("2d 2f", "", "ff", "2g", "2ryy")
+    assert rows[2].proposed_columns == (1,)
+    assert rows[0].proposed_columns == ()
+    assert document.to_text() == original
+
+
+def test_non_kern_extension_proposes_dots() -> None:
+    document = HumdrumDocument.from_text("**text\n=1\n*^\nla\t.\n*v\t*v\nle\n=2\n*-\n")
+
+    rows = prepare_merge_extension(
+        document,
+        plan_merge_move(document, 5, 0),
+    )
+
+    assert len(rows) == 1
+    assert rows[0].fields == ("le", ".")
+    assert rows[0].proposed_columns == (1,)
+
+
+def test_merge_extension_keeps_global_comments_out_of_field_rows() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n=1\n*^\n2c\t2ryy\n*v\t*v\n!!Komentarz globalny\n2d\n=2\n*-\n"
+    )
+
+    rows = prepare_merge_extension(
+        document,
+        plan_merge_move(document, 5, 0),
+    )
+
+    assert [row.source_line for row in rows] == [7]
