@@ -3,7 +3,11 @@ from fractions import Fraction
 import pytest
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
-from spineworks.spine_rhythm import remap_spine_remaining, trace_rhythm
+from spineworks.spine_rhythm import (
+    remap_spine_remaining,
+    suggest_merge_fill,
+    trace_rhythm,
+)
 from spineworks.spine_validation import SpineBranch, SpineIdentity
 
 
@@ -251,3 +255,70 @@ def test_timeline_records_remaining_duration_before_merge() -> None:
         Fraction(1, 4),
         Fraction(0),
     )
+
+
+def test_merge_fill_proposes_rest_followed_by_null_token() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n*^\t*\n4c\t4ryy\t4e\n*v\t*v\t*\n4d\t8f\n.\t8g\n=2\t=2\n*-\t*-\n"
+    )
+    original = document.to_text()
+
+    suggestions = suggest_merge_fill(document, 5, 0)
+
+    assert [(item.source_line, item.source_column, item.token) for item in suggestions] == [
+        (6, 1, "4ryy"),
+        (7, 1, "."),
+    ]
+    assert document.to_text() == original
+
+
+def test_merge_fill_continues_value_started_before_merge() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n=1\t=1\n*^\t*\n2c\t2ryy\t4e\n*v\t*v\t*\n.\t4f\n4d\t4g\n=2\t=2\n*-\t*-\n"
+    )
+
+    suggestions = suggest_merge_fill(document, 5, 0)
+
+    assert [(item.source_line, item.source_column, item.token) for item in suggestions] == [
+        (6, 1, "."),
+        (7, 1, "4ryy"),
+    ]
+
+
+def test_merge_fill_splits_duration_at_existing_row_boundary() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "=1\t=1\n"
+        "*^\t*\n"
+        "4c\t4ryy\t4e\n"
+        "*v\t*v\t*\n"
+        "8%5d\t8f\n"
+        ".\t8g\n"
+        ".\t8a\n"
+        ".\t8b\n"
+        ".\t8cc\n"
+        "=2\t=2\n"
+        "*-\t*-\n"
+    )
+
+    suggestions = suggest_merge_fill(document, 5, 0)
+
+    assert [(item.source_line, item.source_column, item.token) for item in suggestions] == [
+        (6, 1, "2ryy"),
+        (7, 1, "."),
+        (8, 1, "."),
+        (9, 1, "."),
+        (10, 1, "8ryy"),
+    ]
+
+
+def test_merge_fill_proposes_dots_for_non_kern_spine() -> None:
+    document = HumdrumDocument.from_text(
+        "**dynam\t**kern\n=1\t=1\n*^\t*\np\tf\t4c\n*v\t*v\t*\nff\t4d\n=2\t=2\n*-\t*-\n"
+    )
+
+    suggestions = suggest_merge_fill(document, 5, 0)
+
+    assert [(item.source_line, item.source_column, item.token) for item in suggestions] == [
+        (6, 1, "."),
+    ]

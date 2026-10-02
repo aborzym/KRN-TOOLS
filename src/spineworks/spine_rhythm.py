@@ -2,11 +2,13 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
-from spineworks.kern_rhythm import advance_kern_row
+from spineworks.kern_rhythm import advance_kern_row, hidden_rest_token
 from spineworks.spine_validation import (
     RecordKind,
     SpineBranch,
     StructureIssue,
+    plan_merge_move,
+    prepare_merge_extension,
     trace_spines,
 )
 
@@ -172,3 +174,93 @@ def trace_rhythm(document: HumdrumDocument) -> RhythmTrace:
         previous = row.branches
 
     return RhythmTrace(tuple(timed), structure.issue)
+
+
+@dataclass(frozen=True)
+class TokenSuggestion:
+    source_line: int
+    source_column: int
+    token: str
+
+
+def suggest_merge_fill(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> tuple[TokenSuggestion, ...]:
+    """Zaproponuj wypełnienie dodatkowych głosów bez edycji dokumentu."""
+    plan = plan_merge_move(document, source_line, root_column)
+    extension = prepare_merge_extension(document, plan)
+    data_rows = tuple(row for row in extension if row.proposed_columns)
+
+    if plan.identity.spine_type != "**kern":
+        return tuple(
+            TokenSuggestion(row.source_line, column, ".")
+            for row in data_rows
+            for column in row.proposed_columns
+        )
+
+    rhythm = trace_rhythm(document)
+    if rhythm.issue is not None and rhythm.issue.line_number <= plan.end_barline:
+        raise HumdrumError(f"Linia {rhythm.issue.line_number}: {rhythm.issue.message}")
+
+    times = {row.line_number: row for row in rhythm.records}
+    structure = trace_spines(document)
+    selected = next(row for row in structure.records if row.record.line_number == source_line)
+    columns = [
+        column
+        for column, branch in enumerate(selected.branches)
+        if branch.identity == plan.identity and selected.record.fields[column] == "*v"
+    ]
+
+    if len(columns) != plan.branch_count:
+        raise HumdrumError("Nie można ustalić głosów przenoszonego scalenia.")
+
+    merge_time = times[source_line]
+    active_until = [
+        merge_time.onset + merge_time.remaining_before[column] for column in columns[1:]
+    ]
+    measure_end = times[plan.end_barline].onset
+
+    boundaries = sorted(
+        {times[row.source_line].onset for row in data_rows} | {measure_end},
+        reverse=True,
+    )
+    suggestions: list[TokenSuggestion] = []
+
+    for row in data_rows:
+        timed = times[row.source_line]
+
+        for slot, column in enumerate(row.proposed_columns):
+            if timed.duration == 0 or timed.onset < active_until[slot]:
+                token = "."
+            else:
+                token = ""
+                for boundary in boundaries:
+                    if boundary <= timed.onset:
+                        continue
+
+                    try:
+                        candidate = hidden_rest_token(boundary - timed.onset)
+                    except HumdrumError:
+                        continue
+
+                    token = candidate
+                    active_until[slot] = boundary
+                    break
+
+                if not token:
+                    raise HumdrumError(
+                        f"Linia {row.source_line}: nie można zaproponować "
+                        "pauzy kończącej się na dostępnej granicy wiersza."
+                    )
+
+            suggestions.append(
+                TokenSuggestion(
+                    source_line=row.source_line,
+                    source_column=column,
+                    token=token,
+                )
+            )
+
+    return tuple(suggestions)
