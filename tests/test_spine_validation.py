@@ -1275,3 +1275,91 @@ def test_approval_without_proposals_is_noop() -> None:
 
     assert draft.approve_suggestions() is False
     assert draft.can_undo is False
+
+
+def test_proposal_group_is_one_undo_operation() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    row_index = next(
+        index for index, line in enumerate(draft.rendered_lines()) if line.source_line == 7
+    )
+    draft.edit_rendered_token(row_index, 0, "")
+    before_group = draft.to_text()
+
+    assert (
+        draft.propose_tokens(
+            (
+                (7, 0, "2d"),
+                (7, 1, "2ryy"),
+            )
+        )
+        is True
+    )
+    assert draft.pending_suggestions == ((7, 0), (7, 1))
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_group
+    assert draft.pending_suggestions == ()
+
+    # Cofnięcie grupy zachowało wcześniejszą historię edycji.
+    assert draft.undo() is True
+    assert draft.rendered_lines()[row_index].text.split("\t")[0] == "2d"
+
+
+def test_invalid_proposal_group_rolls_back_all_changes() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    before_group = draft.to_text()
+
+    with pytest.raises(ValueError):
+        draft.propose_tokens(
+            (
+                (7, 1, "2ryy"),
+                (7, 4, "2ryy"),
+            )
+        )
+
+    assert draft.to_text() == before_group
+    assert draft.pending_suggestions == ()
+
+    # Nie pozostał dodatkowy krok cofania po nieudanej operacji.
+    assert draft.undo() is True
+    assert draft.to_text() == draft.original_text
+
+
+def test_repeated_proposal_group_does_not_add_undo_step() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    before_group = draft.to_text()
+    tokens = ((7, 1, "2ryy"),)
+
+    assert draft.propose_tokens(tokens) is True
+    assert draft.propose_tokens(tokens) is False
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_group
+    assert draft.pending_suggestions == ()
+
+
+def test_proposal_group_rejects_duplicate_cells() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    before_group = draft.to_text()
+
+    with pytest.raises(ValueError, match="powtarza"):
+        draft.propose_tokens(
+            (
+                (7, 1, "2ryy"),
+                (7, 1, "."),
+            )
+        )
+
+    assert draft.to_text() == before_group
+    assert draft.pending_suggestions == ()
+
+
+def test_empty_proposal_group_is_noop() -> None:
+    _, draft = make_test_draft()
+
+    assert draft.propose_tokens(()) is False
+    assert draft.can_undo is False

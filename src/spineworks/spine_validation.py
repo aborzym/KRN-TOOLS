@@ -1027,6 +1027,42 @@ class FragmentDraft:
         self._pending_suggestions.add(key)
         return True
 
+    def propose_tokens(
+        self,
+        tokens: tuple[tuple[int, int, str], ...],
+    ) -> bool:
+        keys = [(line, column) for line, column, _ in tokens]
+        if len(set(keys)) != len(keys):
+            raise ValueError("Grupa propozycji powtarza to samo pole.")
+
+        if not tokens:
+            return False
+
+        history_start = len(self._undo)
+        self._remember()
+        changed = False
+
+        try:
+            for source_line, source_column, token in tokens:
+                if self.propose_token(source_line, source_column, token):
+                    changed = True
+        except (ValueError, HumdrumError):
+            (
+                self._changes,
+                self._replacements,
+                self._pending_suggestions,
+            ) = self._undo[history_start]
+            del self._undo[history_start:]
+            raise
+
+        if not changed:
+            del self._undo[history_start:]
+            return False
+
+        # Cała grupa ma jeden wspólny stan sprzed operacji.
+        del self._undo[history_start + 1 :]
+        return True
+
     def approve_suggestions(self) -> bool:
         if not self._pending_suggestions:
             return False
