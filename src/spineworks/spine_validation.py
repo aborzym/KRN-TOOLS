@@ -2185,3 +2185,88 @@ def plan_merge_reopening(
                 break
 
     raise HumdrumError("Nie znaleziono ponownego otwarcia tego głosu w tym samym takcie.")
+
+
+@dataclass(frozen=True)
+class MergeReopeningProposal:
+    replacements: tuple[tuple[int, tuple[DraftLine, ...]], ...]
+    proposed_cells: tuple[tuple[int, int], ...]
+
+
+def prepare_merge_reopening(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> MergeReopeningProposal:
+    """Połącz rozdwojenia rozdzielone scaleniem i ponownym *^."""
+    plan = plan_merge_reopening(document, source_line, root_column)
+    trace = trace_spines(document)
+    rows = {row.record.line_number: row for row in trace.records}
+    replacements: dict[int, tuple[DraftLine, ...]] = {}
+    proposed_cells: list[tuple[int, int]] = []
+
+    closing = rows[source_line]
+    fields = list(closing.record.fields)
+    for column, branch in enumerate(closing.branches):
+        if branch in plan.branches and fields[column] == "*v":
+            fields[column] = "*"
+
+    replacements[source_line] = (
+        ()
+        if all(token == "*" for token in fields)
+        else (DraftLine(source_line=source_line, text="\t".join(fields)),)
+    )
+
+    for line_number in range(source_line + 1, plan.reopening_line):
+        row = rows[line_number]
+        record = row.record
+        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            continue
+
+        column = row.branches.index(plan.parent)
+        fields = list(record.fields)
+
+        if record.kind is RecordKind.DATA:
+            fill = "" if plan.identity.spine_type == "**kern" else "."
+            proposed_cells.append((line_number, column + 1))
+        elif record.kind is RecordKind.LOCAL_COMMENT:
+            fill = "!"
+        elif record.kind is RecordKind.INTERPRETATION:
+            fill = fields[column]
+            if fill in {"*^", "*v", "*x", "*+", "*-"}:
+                raise HumdrumError(
+                    f"Linia {line_number}: nieoczekiwana operacja "
+                    "strukturalna pomiędzy rozdwojeniami."
+                )
+        else:
+            raise HumdrumError(f"Linia {line_number}: nieoczekiwany rekord pomiędzy rozdwojeniami.")
+
+        fields.insert(column + 1, fill)
+        replacements[line_number] = (
+            DraftLine(
+                source_line=line_number,
+                text="\t".join(fields),
+            ),
+        )
+
+    reopening = rows[plan.reopening_line]
+    column = reopening.branches.index(plan.parent)
+    fields = list(reopening.record.fields)
+    fields[column] = "*"
+    fields.insert(column + 1, "*")
+
+    replacements[plan.reopening_line] = (
+        ()
+        if all(token == "*" for token in fields)
+        else (
+            DraftLine(
+                source_line=plan.reopening_line,
+                text="\t".join(fields),
+            ),
+        )
+    )
+
+    return MergeReopeningProposal(
+        replacements=tuple(sorted(replacements.items())),
+        proposed_cells=tuple(proposed_cells),
+    )

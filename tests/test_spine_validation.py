@@ -20,6 +20,7 @@ from spineworks.spine_validation import (
     prepare_closing_block,
     prepare_merge_extension,
     prepare_merge_move,
+    prepare_merge_reopening,
     prepare_split_move,
     read_records,
     separate_merge_rows,
@@ -2335,3 +2336,90 @@ def test_merge_reopening_plan_ignores_opening_of_other_instrument() -> None:
 
     with pytest.raises(HumdrumError, match="Nie znaleziono"):
         plan_merge_reopening(document, 5, 0)
+
+
+def test_merge_reopening_removes_pair_and_extends_data() -> None:
+    document = HumdrumDocument.from_text(
+        '**kern\n*I"Bassoon\n*^\n=46\t=46\n8c\t8ryy\n*v\t*v\n8d\n*^\n8e\t8ryy\n=47\t=47\n*-\t*-\n'
+    )
+    original = document.to_text()
+
+    proposal = prepare_merge_reopening(document, 6, 0)
+    replacements = dict(proposal.replacements)
+
+    assert replacements[6] == ()
+    assert replacements[7][0].source_line == 7
+    assert replacements[7][0].text == "8d\t"
+    assert replacements[8] == ()
+    assert proposal.proposed_cells == ((7, 1),)
+    assert document.to_text() == original
+
+
+def test_merge_reopening_preserves_comments_and_interpretations() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "*^\n"
+        "=1\t=1\n"
+        "8c\t8ryy\n"
+        "*v\t*v\n"
+        "!!Komentarz globalny\n"
+        "!Komentarz lokalny\n"
+        "*clefF4\n"
+        "8d\n"
+        "*^\n"
+        "8e\t8ryy\n"
+        "=2\t=2\n"
+        "*-\t*-\n"
+    )
+
+    proposal = prepare_merge_reopening(document, 5, 0)
+    replacements = dict(proposal.replacements)
+
+    assert 6 not in replacements
+    assert replacements[7][0].text == "!Komentarz lokalny\t!"
+    assert replacements[8][0].text == "*clefF4\t*clefF4"
+    assert replacements[9][0].text == "8d\t"
+    assert proposal.proposed_cells == ((9, 1),)
+
+
+def test_merge_reopening_preserves_other_instrument_operations() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "*^\t*\n"
+        "=1\t=1\t=1\n"
+        "8c\t8ryy\t8e\n"
+        "*v\t*v\t*^\n"
+        "8d\t8f\t8ryy\n"
+        "*^\t*v\t*v\n"
+        "8e\t8ryy\t8g\n"
+        "=2\t=2\t=2\n"
+        "*-\t*-\t*-\n"
+    )
+
+    proposal = prepare_merge_reopening(document, 5, 0)
+    replacements = dict(proposal.replacements)
+
+    assert replacements[5][0].text == "*\t*\t*^"
+    assert replacements[6][0].text == "8d\t\t8f\t8ryy"
+    assert replacements[7][0].text == "*\t*\t*v\t*v"
+
+
+def test_merge_reopening_uses_dots_for_non_kern_data() -> None:
+    document = HumdrumDocument.from_text(
+        "**dynam\t**kern\n"
+        "*^\t*\n"
+        "=1\t=1\t=1\n"
+        "p\tf\t8c\n"
+        "*v\t*v\t*\n"
+        "ff\t8d\n"
+        "*^\t*\n"
+        "p\tf\t8e\n"
+        "=2\t=2\t=2\n"
+        "*-\t*-\t*-\n"
+    )
+
+    proposal = prepare_merge_reopening(document, 5, 0)
+    replacements = dict(proposal.replacements)
+
+    assert replacements[6][0].text == "ff\t.\t8d"
+    assert proposal.proposed_cells == ((6, 1),)
