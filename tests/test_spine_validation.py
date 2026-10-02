@@ -751,3 +751,68 @@ def test_draft_separates_merges_with_descriptions_and_one_undo() -> None:
 
     assert draft.undo() is True
     assert draft.to_text() == document.to_text()
+
+
+def make_merge_mapping_draft(
+    *,
+    data_after_merge: bool,
+) -> FragmentDraft:
+    following = "1d\t.\t1f\n" if data_after_merge else ""
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Oboe\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "1c\t1ryy\tp\t1e\t1ryy\n"
+        "*v\t*v\t*\t*v\t*v\n"
+        f"{following}"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    rows = build_fragment_rows(
+        trace,
+        problem,
+        build_measure_view(trace, problem, issues),
+    )
+    return FragmentDraft(document, rows)
+
+
+def test_validates_source_range_after_inserting_merge_rows() -> None:
+    draft = make_merge_mapping_draft(data_after_merge=False)
+
+    assert draft.separate_merges(6) is True
+    result = validate_draft(draft, start_line=3, end_line=7)
+
+    assert result.state is ValidationState.VALID
+    inserted = [line for line in draft.rendered_lines() if line.source_line is None]
+    assert [line.anchor_line for line in inserted] == [6, 6]
+
+
+def test_new_row_errors_use_descriptions_instead_of_result_numbers() -> None:
+    draft = make_merge_mapping_draft(data_after_merge=True)
+
+    assert draft.separate_merges(6) is True
+    result = validate_draft(draft, start_line=3, end_line=8)
+
+    assert result.state is ValidationState.ERROR
+    assert any(message.startswith("nowe: Oboe:") for message in result.messages)
+    assert any(message.startswith("nowe: Violin 2:") for message in result.messages)
+
+
+def test_source_range_includes_record_shifted_by_inserted_rows() -> None:
+    draft = make_merge_mapping_draft(data_after_merge=True)
+    draft.separate_merges(6)
+
+    # Source line 7 is now physical line 8.
+    draft.edit_token(7, 0, "")
+    result = validate_draft(draft, start_line=3, end_line=7)
+
+    assert result.state is ValidationState.ERROR
+    assert any(message.startswith("Linia 7: Puste pole") for message in result.messages)
+
+    assert draft.undo() is True
+    assert draft.undo() is True
+    assert draft.to_text() == draft.original_text

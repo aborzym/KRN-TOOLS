@@ -671,6 +671,7 @@ class DraftLine:
     source_line: int | None
     text: str
     description: str = ""
+    anchor_line: int | None = None
 
 
 class FragmentDraft:
@@ -788,6 +789,7 @@ class FragmentDraft:
                 source_line=None,
                 text=line,
                 description=f"nowe: {identity.instrument or identity.spine_type}",
+                anchor_line=source_line,
             )
             for identity, line in zip(
                 replacement.identities,
@@ -848,9 +850,29 @@ def validate_draft(
     start_line: int,
     end_line: int,
 ) -> DraftValidation:
-    """Validate the edited range without requiring unrelated measures to be fixed."""
+    """Validate a source range after mapping it to the current draft."""
     if start_line < 1 or end_line < start_line:
         raise ValueError("Nieprawidłowy zakres linii do kontroli.")
+
+    rendered = draft.rendered_lines()
+    positions: list[int] = []
+
+    for position, line in enumerate(rendered, start=1):
+        origin = line.source_line if line.source_line is not None else line.anchor_line
+        if origin is not None and start_line <= origin <= end_line:
+            positions.append(position)
+
+    if not positions:
+        raise ValueError("Zakres źródłowy nie ma wierszy w bieżącym szkicu.")
+
+    current_start = min(positions)
+    current_end = max(positions)
+
+    def location(current_line: int) -> str:
+        line = rendered[current_line - 1]
+        if line.source_line is not None:
+            return f"Linia {line.source_line}"
+        return line.description or "Nowy wiersz"
 
     try:
         document = HumdrumDocument.from_text(draft.to_text())
@@ -864,12 +886,12 @@ def validate_draft(
     messages: list[str] = []
 
     # A structural failure before the range also makes its identity uncertain.
-    if trace.issue is not None and trace.issue.line_number <= end_line:
-        messages.append(f"Linia {trace.issue.line_number}: {trace.issue.message}")
+    if trace.issue is not None and trace.issue.line_number <= current_end:
+        messages.append(f"{location(trace.issue.line_number)}: {trace.issue.message}")
 
     for issue in find_split_issues(trace):
-        if start_line <= issue.line_number <= end_line:
-            messages.append(f"Linia {issue.line_number}: {issue.message}")
+        if current_start <= issue.line_number <= current_end:
+            messages.append(f"{location(issue.line_number)}: {issue.message}")
 
     if messages:
         return DraftValidation(
