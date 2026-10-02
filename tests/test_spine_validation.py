@@ -12,6 +12,7 @@ from spineworks.spine_validation import (
     plan_merge_move,
     prepare_closing_block,
     prepare_merge_extension,
+    prepare_merge_move,
     read_records,
     separate_merge_rows,
     trace_spines,
@@ -991,3 +992,79 @@ def test_closing_block_without_other_merges() -> None:
 
     assert len(closing) == 1
     assert closing[0].fields == ("*v", "*v")
+
+
+def test_complete_merge_move_preserves_source_mapping_and_comments() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        '*I"Violin 2\t*\t*I"Oboe\n'
+        "=45\t=45\t=45\n"
+        "*^\t*\t*^\n"
+        "2c\t2ryy\tp\t2e\t2ryy\n"
+        "*v\t*v\t*\t*\t*\n"
+        "!LO:S:color=red\t!\t!\t!\n"
+        "2d\tff\t2f\t2ryy\n"
+        "*\t*\t*v\t*v\n"
+        "!\t!\t!LO:TX:t=Test\n"
+        "!!Komentarz globalny\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+    original = document.to_text()
+
+    proposal = prepare_merge_move(document, 6, 0)
+    replacements = dict(proposal.replacements)
+
+    assert replacements[6] == ()
+    assert proposal.proposed_cells == ((8, 1),)
+    assert replacements[7][0].text == "!LO:S:color=red\t!\t!\t!\t!"
+    assert replacements[8][0].text == "2d\t\tff\t2f\t2ryy"
+
+    block = replacements[9]
+    assert [line.description for line in block[:2]] == [
+        "nowe: Oboe",
+        "nowe: Violin 2",
+    ]
+    assert [line.text for line in block] == [
+        "*\t*\t*\t*v\t*v",
+        "*v\t*v\t*\t*",
+        "!\t!\t!LO:TX:t=Test",
+        "!!Komentarz globalny",
+    ]
+    assert block[2].source_line == 10
+    assert block[3].source_line == 11
+    assert replacements[10] == ()
+    assert replacements[11] == ()
+    assert document.to_text() == original
+
+    candidate_lines: list[str] = []
+    for source_line, text in enumerate(document.lines, start=1):
+        if source_line in replacements:
+            candidate_lines.extend(line.text for line in replacements[source_line])
+        else:
+            candidate_lines.append(text)
+
+    # Fill the intentionally empty kern proposal solely for structural verification.
+    candidate_lines = [line.replace("2d\t\tff", "2d\t2ryy\tff") for line in candidate_lines]
+    candidate = HumdrumDocument(candidate_lines, document.trailing_newline)
+    trace = trace_spines(candidate)
+
+    assert trace.issue is None
+    assert find_split_issues(trace) == ()
+
+
+def test_complete_non_kern_merge_move_without_existing_closings() -> None:
+    document = HumdrumDocument.from_text("**text\n=1\n*^\nla\t.\n*v\t*v\nle\n=2\n*-\n")
+
+    proposal = prepare_merge_move(document, 5, 0)
+    replacements = dict(proposal.replacements)
+
+    assert replacements[5] == ()
+    assert replacements[6][0].text == "le\t."
+    assert proposal.proposed_cells == ((6, 1),)
+    assert [line.text for line in replacements[7]] == [
+        "*v\t*v",
+        "=2",
+    ]
+    assert replacements[7][0].source_line is None
+    assert replacements[7][1].source_line == 7

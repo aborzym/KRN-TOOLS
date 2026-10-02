@@ -1283,3 +1283,132 @@ def prepare_closing_block(
         pending.pop(operation)
 
     return tuple(result)
+
+
+@dataclass(frozen=True)
+class MergeMoveProposal:
+    replacements: tuple[tuple[int, tuple[DraftLine, ...]], ...]
+    proposed_cells: tuple[tuple[int, int], ...]
+
+
+def prepare_merge_move(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> MergeMoveProposal:
+    """Prepare source-mapped replacements without modifying the document."""
+    plan = plan_merge_move(document, source_line, root_column)
+    extension = prepare_merge_extension(document, plan)
+    closing = prepare_closing_block(document, plan)
+    trace = trace_spines(document)
+    rows = {row.record.line_number: row for row in trace.records}
+
+    replacements: dict[int, tuple[DraftLine, ...]] = {}
+    proposed_cells: list[tuple[int, int]] = []
+
+    selected = rows[source_line]
+    selected_fields = list(selected.record.fields)
+
+    for column, branch in enumerate(selected.branches):
+        if branch.identity.root_column == root_column and selected_fields[column] == "*v":
+            selected_fields[column] = "*"
+
+    if all(token == "*" for token in selected_fields):
+        replacements[source_line] = ()
+    else:
+        replacements[source_line] = (
+            DraftLine(
+                source_line=source_line,
+                text="\t".join(selected_fields),
+            ),
+        )
+
+    for row in extension:
+        replacements[row.source_line] = (
+            DraftLine(
+                source_line=row.source_line,
+                text="\t".join(row.fields),
+            ),
+        )
+        proposed_cells.extend((row.source_line, column) for column in row.proposed_columns)
+
+    block_lines = [
+        DraftLine(
+            source_line=None,
+            text="\t".join(row.fields),
+            description=f"nowe: {row.identity.instrument or row.identity.spine_type}",
+            anchor_line=plan.closing_block_start,
+        )
+        for row in closing
+    ]
+
+    # After all closing operations, the spine structure matches the source barline.
+    final_branches = rows[plan.end_barline].branches
+    comments: list[DraftLine] = []
+
+    for line_number in range(plan.closing_block_start, plan.end_barline):
+        row = rows[line_number]
+        record = row.record
+
+        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            comments.append(
+                DraftLine(
+                    source_line=line_number,
+                    text=record.text,
+                )
+            )
+        elif record.kind is RecordKind.LOCAL_COMMENT:
+            fields = ["!"] * len(final_branches)
+
+            for token, branch in zip(
+                record.fields,
+                row.branches,
+                strict=True,
+            ):
+                if token == "!":
+                    continue
+
+                destinations = [
+                    column
+                    for column, final in enumerate(final_branches)
+                    if final.identity == branch.identity
+                    and branch.path[: len(final.path)] == final.path
+                ]
+                if len(destinations) != 1:
+                    raise HumdrumError(
+                        f"Linia {line_number}: nie można bezpiecznie "
+                        "przypisać komentarza po scaleniu."
+                    )
+
+                destination = destinations[0]
+                if fields[destination] not in {"!", token}:
+                    raise HumdrumError(
+                        f"Linia {line_number}: różne komentarze gałęzi trafiłyby do jednego pola."
+                    )
+                fields[destination] = token
+
+            comments.append(
+                DraftLine(
+                    source_line=line_number,
+                    text="\t".join(fields),
+                )
+            )
+
+        replacements[line_number] = ()
+
+    block_lines.extend(comments)
+
+    if plan.closing_block_start == plan.end_barline:
+        block_lines.append(
+            DraftLine(
+                source_line=plan.end_barline,
+                text=document.lines[plan.end_barline - 1],
+            )
+        )
+
+    replacements[plan.closing_block_start] = tuple(block_lines)
+
+    return MergeMoveProposal(
+        replacements=tuple(sorted(replacements.items())),
+        proposed_cells=tuple(proposed_cells),
+    )
