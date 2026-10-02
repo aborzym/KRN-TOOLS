@@ -1,7 +1,14 @@
+from dataclasses import dataclass
 from fractions import Fraction
 
-from spineworks.humdrum import HumdrumError
-from spineworks.spine_validation import SpineBranch
+from spineworks.humdrum import HumdrumDocument, HumdrumError
+from spineworks.kern_rhythm import advance_kern_row
+from spineworks.spine_validation import (
+    RecordKind,
+    SpineBranch,
+    StructureIssue,
+    trace_spines,
+)
 
 
 def remap_spine_remaining(
@@ -67,3 +74,92 @@ def remap_spine_remaining(
         result.append(descendants[0])
 
     return tuple(result)
+
+
+@dataclass(frozen=True)
+class TimedRecord:
+    line_number: int
+    onset: Fraction
+    duration: Fraction
+
+
+@dataclass(frozen=True)
+class RhythmTrace:
+    records: tuple[TimedRecord, ...]
+    issue: StructureIssue | None
+
+
+def trace_rhythm(document: HumdrumDocument) -> RhythmTrace:
+    """Odczytaj oś czasu bez zmieniania dokumentu."""
+    structure = trace_spines(document)
+    timed: list[TimedRecord] = []
+    previous: tuple[SpineBranch, ...] = ()
+    remaining: tuple[Fraction, ...] = ()
+    current_time = Fraction(0)
+    initialized = False
+
+    for row in structure.records:
+        record = row.record
+
+        if structure.issue is not None and record.line_number >= structure.issue.line_number:
+            return RhythmTrace(tuple(timed), structure.issue)
+
+        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            timed.append(TimedRecord(record.line_number, current_time, Fraction(0)))
+            continue
+
+        if not row.branches:
+            timed.append(TimedRecord(record.line_number, current_time, Fraction(0)))
+            continue
+
+        try:
+            if not initialized:
+                remaining = tuple(Fraction(0) for _ in row.branches)
+                initialized = True
+            else:
+                remaining = remap_spine_remaining(
+                    previous,
+                    remaining,
+                    row.branches,
+                )
+
+            elapsed = Fraction(0)
+
+            if record.kind is RecordKind.DATA:
+                kern_columns = [
+                    column
+                    for column, branch in enumerate(row.branches)
+                    if branch.identity.spine_type == "**kern"
+                ]
+                tokens = tuple(record.fields[column] for column in kern_columns)
+
+                if not tokens or all(token == "." for token in tokens):
+                    raise HumdrumError(
+                        "Nie można ustalić czasu wiersza: brak nowego tokenu rytmicznego **kern."
+                    )
+
+                elapsed, kern_remaining = advance_kern_row(
+                    tokens,
+                    tuple(remaining[column] for column in kern_columns),
+                )
+
+                updated = list(remaining)
+                for column, value in zip(
+                    kern_columns,
+                    kern_remaining,
+                    strict=True,
+                ):
+                    updated[column] = value
+                remaining = tuple(updated)
+
+        except HumdrumError as error:
+            return RhythmTrace(
+                records=tuple(timed),
+                issue=StructureIssue(record.line_number, str(error)),
+            )
+
+        timed.append(TimedRecord(record.line_number, current_time, elapsed))
+        current_time += elapsed
+        previous = row.branches
+
+    return RhythmTrace(tuple(timed), structure.issue)

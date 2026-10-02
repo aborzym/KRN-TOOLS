@@ -2,8 +2,8 @@ from fractions import Fraction
 
 import pytest
 
-from spineworks.humdrum import HumdrumError
-from spineworks.spine_rhythm import remap_spine_remaining
+from spineworks.humdrum import HumdrumDocument, HumdrumError
+from spineworks.spine_rhythm import remap_spine_remaining, trace_rhythm
 from spineworks.spine_validation import SpineBranch, SpineIdentity
 
 
@@ -134,3 +134,100 @@ def test_rejects_negative_remaining_duration() -> None:
             (Fraction(-1, 4),),
             (branch,),
         )
+
+
+def test_timeline_tracks_sustained_notes_and_barline() -> None:
+    document = HumdrumDocument.from_text("**kern\t**kern\n=1\t=1\n2c\t4e\n.\t4f\n=2\t=2\n*-\t*-\n")
+
+    result = trace_rhythm(document)
+    rows = {row.line_number: row for row in result.records}
+
+    assert result.issue is None
+    assert rows[3].onset == 0
+    assert rows[3].duration == Fraction(1, 4)
+    assert rows[4].onset == Fraction(1, 4)
+    assert rows[4].duration == Fraction(1, 4)
+    assert rows[5].onset == Fraction(1, 2)
+    assert rows[5].duration == 0
+
+
+def test_timeline_preserves_duration_across_split() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n2c\t4e\n*^\t*\n.\t.\t4f\n*v\t*v\t*\n*-\t*-\n"
+    )
+
+    result = trace_rhythm(document)
+    rows = {row.line_number: row for row in result.records}
+
+    assert result.issue is None
+    assert rows[3].onset == Fraction(1, 4)
+    assert rows[4].onset == Fraction(1, 4)
+    assert rows[4].duration == Fraction(1, 4)
+    assert rows[5].onset == Fraction(1, 2)
+
+
+def test_timeline_grace_row_does_not_shift_following_note() -> None:
+    document = HumdrumDocument.from_text("**kern\t**kern\n8cq\t.\n4c\t4e\n*-\t*-\n")
+
+    result = trace_rhythm(document)
+    rows = {row.line_number: row for row in result.records}
+
+    assert result.issue is None
+    assert rows[2].onset == 0
+    assert rows[2].duration == 0
+    assert rows[3].onset == 0
+    assert rows[3].duration == Fraction(1, 4)
+
+
+def test_timeline_comments_and_interpretations_do_not_advance_time() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n4c\n!!Komentarz globalny\n!Komentarz lokalny\n*clefG2\n4d\n*-\n"
+    )
+
+    result = trace_rhythm(document)
+    rows = {row.line_number: row for row in result.records}
+
+    assert result.issue is None
+    for line_number in (3, 4, 5):
+        assert rows[line_number].onset == Fraction(1, 4)
+        assert rows[line_number].duration == 0
+    assert rows[6].onset == Fraction(1, 4)
+
+
+def test_timeline_ignores_non_kern_tokens_when_calculating_time() -> None:
+    document = HumdrumDocument.from_text("**kern\t**dynam\n4c\tp\n4d\t<\n*-\t*-\n")
+
+    result = trace_rhythm(document)
+
+    assert result.issue is None
+    assert result.records[-1].onset == Fraction(1, 2)
+
+
+def test_timeline_reports_ambiguous_null_only_data_row() -> None:
+    document = HumdrumDocument.from_text("**kern\t**dynam\n2c\tp\n.\tf\n*-\t*-\n")
+
+    result = trace_rhythm(document)
+
+    assert result.issue is not None
+    assert result.issue.line_number == 3
+    assert "brak nowego tokenu" in result.issue.message
+
+
+def test_timeline_reports_overlapping_note_with_line_number() -> None:
+    document = HumdrumDocument.from_text("**kern\t**kern\n2c\t4e\n4d\t4f\n*-\t*-\n")
+
+    result = trace_rhythm(document)
+
+    assert result.issue is not None
+    assert result.issue.line_number == 3
+    assert "przed zakończeniem" in result.issue.message
+
+
+def test_timeline_reports_structure_failure() -> None:
+    document = HumdrumDocument.from_text("**kern\t**kern\n4c\t4e\n4d\n*-\t*-\n")
+
+    result = trace_rhythm(document)
+
+    assert result.issue is not None
+    assert result.issue.line_number == 3
+    assert "liczba spinów" in result.issue.message
