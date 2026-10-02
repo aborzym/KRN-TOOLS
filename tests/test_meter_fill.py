@@ -8,6 +8,7 @@ from spineworks.spine_rhythm import (
     TimedRecord,
     _meter_fill_tokens,
     suggest_merge_fill,
+    suggest_split_fill,
 )
 
 
@@ -173,3 +174,44 @@ def test_merge_fill_rejects_option_for_different_meter() -> None:
 
     with pytest.raises(HumdrumError, match="nie odpowiada metrum"):
         suggest_merge_fill(document, 6, 0, rest_option=option)
+
+
+def test_split_fill_respects_four_four_grouping() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n*M4/4\n=1\n4c\n4d\n4e\n*^\n4f\t4ryy\n*v\t*v\n=2\n*-\n"
+    )
+    option = meter_rest_options(MeterSignature(4, 4))[0]
+    original = document.to_text()
+
+    suggestions = suggest_split_fill(
+        document,
+        7,
+        0,
+        rest_option=option,
+    )
+
+    assert tuple((item.source_line, item.source_column, item.token) for item in suggestions) == (
+        (4, 1, "2ryy"),
+        (5, 1, "."),
+        (6, 1, "4ryy"),
+    )
+    assert document.to_text() == original
+
+
+def test_split_fill_uses_half_rest_on_first_two_beats_of_three_four() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n*M3/4\n=1\n4c\n4d\n*^\n4e\t4ryy\n*v\t*v\n=2\n*-\n"
+    )
+    option = meter_rest_options(MeterSignature(3, 4))[0]
+
+    suggestions = suggest_split_fill(
+        document,
+        6,
+        0,
+        rest_option=option,
+    )
+
+    assert tuple((item.source_line, item.source_column, item.token) for item in suggestions) == (
+        (4, 1, "2ryy"),
+        (5, 1, "."),
+    )

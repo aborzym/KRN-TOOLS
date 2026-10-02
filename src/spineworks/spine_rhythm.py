@@ -319,6 +319,8 @@ def suggest_split_fill(
     document: HumdrumDocument,
     source_line: int,
     root_column: int,
+    *,
+    rest_option: MeterRestOption | None = None,
 ) -> tuple[TokenSuggestion, ...]:
     """Zaproponuj wypełnienie głosu przed pierwotnym *^."""
     plan = plan_split_move(document, source_line, root_column)
@@ -341,6 +343,37 @@ def suggest_split_fill(
     target_time = times[plan.target_line]
     active_until = target_time.onset + target_time.remaining_before[column]
     original_opening_time = times[source_line].onset
+
+    if rest_option is not None:
+        meter = meter_at_line(document, plan.target_line, root_column)
+        if rest_option.meter != meter:
+            raise HumdrumError("Wybrany podział pauz nie odpowiada metrum instrumentu.")
+
+        preceding_barlines = [
+            row.record.line_number
+            for row in structure.records
+            if row.record.kind is RecordKind.BARLINE and row.record.line_number <= plan.target_line
+        ]
+        measure_start = times[preceding_barlines[-1]].onset if preceding_barlines else Fraction(0)
+        timed_rows = tuple(
+            times[line] for line in dict.fromkeys(line for line, _ in proposal.proposed_cells)
+        )
+        tokens = _meter_fill_tokens(
+            timed_rows,
+            option=rest_option,
+            measure_start=measure_start,
+            active_until=active_until,
+            end_time=original_opening_time,
+        )
+
+        return tuple(
+            TokenSuggestion(
+                source_line=line,
+                source_column=column,
+                token=tokens[line],
+            )
+            for line, column in proposal.proposed_cells
+        )
 
     boundaries = sorted(
         {times[line].onset for line, _ in proposal.proposed_cells} | {original_opening_time},
