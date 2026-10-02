@@ -15,6 +15,7 @@ from spineworks.spine_validation import (
     find_split_issues,
     group_split_issues,
     plan_merge_move,
+    plan_merge_reopening,
     plan_split_move,
     prepare_closing_block,
     prepare_merge_extension,
@@ -2270,3 +2271,67 @@ def test_separate_merges_after_split_move_preserves_draft_history() -> None:
     assert draft.undo() is True
     assert draft.to_text() == draft.original_text
     assert document.to_text() == draft.original_text
+
+
+def test_merge_reopening_plan_finds_pair_in_same_measure() -> None:
+    document = HumdrumDocument.from_text(
+        '**kern\n*I"Bassoon\n*^\n=46\t=46\n8c\t8ryy\n*v\t*v\n8d\n*^\n8e\t8ryy\n=47\t=47\n*-\t*-\n'
+    )
+    original = document.to_text()
+
+    plan = plan_merge_reopening(document, 6, 0)
+
+    assert plan.source_line == 6
+    assert plan.reopening_line == 8
+    assert plan.identity.instrument == "Bassoon"
+    assert plan.parent.path == ()
+    assert tuple(branch.path for branch in plan.branches) == ((0,), (1,))
+    assert document.to_text() == original
+
+
+def test_merge_reopening_plan_allows_comments_and_interpretations() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "*^\n"
+        "=1\t=1\n"
+        "8c\t8ryy\n"
+        "*v\t*v\n"
+        "!!Komentarz globalny\n"
+        "!Komentarz lokalny\n"
+        "*clefF4\n"
+        "8d\n"
+        "*^\n"
+        "8e\t8ryy\n"
+        "=2\t=2\n"
+        "*-\t*-\n"
+    )
+
+    plan = plan_merge_reopening(document, 5, 0)
+
+    assert plan.reopening_line == 10
+
+
+def test_merge_reopening_plan_does_not_cross_barline() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n*^\n=1\t=1\n8c\t8ryy\n*v\t*v\n8d\n=2\n*^\n8e\t8ryy\n*-\t*-\n"
+    )
+
+    with pytest.raises(HumdrumError, match="tym samym takcie"):
+        plan_merge_reopening(document, 5, 0)
+
+
+def test_merge_reopening_plan_ignores_opening_of_other_instrument() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "*^\t*\n"
+        "=1\t=1\t=1\n"
+        "8c\t8ryy\t8e\n"
+        "*v\t*v\t*\n"
+        "*\t*^\n"
+        "8d\t8f\t8ryy\n"
+        "=2\t=2\t=2\n"
+        "*-\t*-\t*-\n"
+    )
+
+    with pytest.raises(HumdrumError, match="Nie znaleziono"):
+        plan_merge_reopening(document, 5, 0)

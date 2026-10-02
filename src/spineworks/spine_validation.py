@@ -2103,3 +2103,85 @@ def prepare_split_move(
         replacements=tuple(sorted(replacements.items())),
         proposed_cells=tuple(proposed_cells),
     )
+
+
+@dataclass(frozen=True)
+class MergeReopeningPlan:
+    source_line: int
+    reopening_line: int
+    identity: SpineIdentity
+    branches: tuple[SpineBranch, ...]
+    parent: SpineBranch
+
+
+def plan_merge_reopening(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> MergeReopeningPlan:
+    """Znajdź ponowne otwarcie po scaleniu w tym samym takcie."""
+    trace = trace_spines(document)
+    if trace.issue is not None:
+        raise HumdrumError(f"Linia {trace.issue.line_number}: {trace.issue.message}")
+
+    selected = next(
+        (row for row in trace.records if row.record.line_number == source_line),
+        None,
+    )
+    if selected is None:
+        raise ValueError("Linia scalenia nie istnieje.")
+
+    columns = [
+        column
+        for column, branch in enumerate(selected.branches)
+        if branch.identity.root_column == root_column and selected.record.fields[column] == "*v"
+    ]
+    if not columns:
+        raise HumdrumError("Wybrany spine nie ma scalenia w tej linii.")
+
+    start = columns[0]
+    end = columns[-1] + 1
+    if columns != list(range(start, end)):
+        raise HumdrumError("Wybór obejmuje więcej niż jedną grupę scaleń.")
+
+    branches = selected.branches[start:end]
+    parent = _merge_branch_group(branches)
+    if parent is None:
+        raise HumdrumError("Nieprawidłowa grupa scalanych gałęzi.")
+
+    # Pierwsza wersja łączy parę gałęzi bez zagnieżdżeń.
+    if tuple(branch.path for branch in branches) != (
+        parent.path + (0,),
+        parent.path + (1,),
+    ):
+        raise HumdrumError(
+            "Łączenie ponownych otwarć zagnieżdżonych gałęzi nie jest jeszcze obsługiwane."
+        )
+
+    for row in trace.records:
+        record = row.record
+        if record.line_number <= source_line:
+            continue
+        if record.kind is RecordKind.BARLINE:
+            break
+        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            continue
+
+        matching = [column for column, branch in enumerate(row.branches) if branch == parent]
+        if len(matching) != 1:
+            raise HumdrumError("Scalony głos zmienił strukturę przed ponownym otwarciem.")
+
+        token = record.fields[matching[0]]
+        if record.kind is RecordKind.INTERPRETATION:
+            if token == "*^":
+                return MergeReopeningPlan(
+                    source_line=source_line,
+                    reopening_line=record.line_number,
+                    identity=parent.identity,
+                    branches=branches,
+                    parent=parent,
+                )
+            if token in {"*v", "*x", "*+", "*-"}:
+                break
+
+    raise HumdrumError("Nie znaleziono ponownego otwarcia tego głosu w tym samym takcie.")
