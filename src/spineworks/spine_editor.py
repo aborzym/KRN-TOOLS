@@ -284,6 +284,22 @@ class SpineEditor(QWidget):
         self.move_merge_button.clicked.connect(self._move_merge)
         self.move_merge_button.hide()
         title_row.insertWidget(2, self.move_merge_button)
+
+        self.approve_button = QPushButton("Zatwierdź propozycje", self)
+        self.approve_button.setFixedWidth(self.button_width)
+        self.approve_button.setObjectName("primaryButton")
+        self.approve_button.setToolTip("Zatwierdź wszystkie oczekujące propozycje.")
+        self.approve_button.clicked.connect(self._approve_suggestions)
+        self.approve_button.hide()
+        title_row.insertWidget(3, self.approve_button)
+
+        self.undo_button = QPushButton("Cofnij", self)
+        self.undo_button.setFixedWidth(self.button_width)
+        self.undo_button.setObjectName("primaryButton")
+        self.undo_button.clicked.connect(self._undo)
+        self.undo_button.hide()
+        title_row.insertWidget(4, self.undo_button)
+
         self.title_label.setText(f"Takt {self.problem.measure} · zakres 1 z {len(problems)}")
         self._show_rows()
         self.report.setPlainText(
@@ -688,6 +704,44 @@ class SpineEditor(QWidget):
             flush=True,
         )
 
+    def _undo(self) -> None:
+        self.undo_button.setFocus()
+
+        if not self._editing or not self.draft.undo():
+            return
+
+        vertical = self.table.verticalScrollBar().value()
+        horizontal = self.table.horizontalScrollBar().value()
+
+        self.table.blockSignals(True)
+        try:
+            self._show_rows()
+        finally:
+            self.table.blockSignals(False)
+
+        self.table.verticalScrollBar().setValue(vertical)
+        self.table.horizontalScrollBar().setValue(horizontal)
+        self._update_validation()
+
+    def _approve_suggestions(self) -> None:
+        self.approve_button.setFocus()
+
+        if not self._editing or not self.draft.approve_suggestions():
+            return
+
+        vertical = self.table.verticalScrollBar().value()
+        horizontal = self.table.horizontalScrollBar().value()
+
+        self.table.blockSignals(True)
+        try:
+            self._show_rows()
+        finally:
+            self.table.blockSignals(False)
+
+        self.table.verticalScrollBar().setValue(vertical)
+        self.table.horizontalScrollBar().setValue(horizontal)
+        self._update_validation()
+
     def _toggle_view(self) -> None:
         # Zakończ edycję aktywnego pola przed odczytaniem szkicu.
         self.view_button.setFocus()
@@ -792,7 +846,12 @@ class SpineEditor(QWidget):
             return
 
         text = item.text()
-        if text.startswith("!"):
+        source_line = self.draft.rendered_lines()[rendered_index].source_line
+        pending = (source_line, column) in self.draft.pending_suggestions
+
+        if pending:
+            color = "#729f9b"
+        elif text.startswith("!"):
             color = "#dfa060"
         elif text in {"*^", "*v"}:
             color = "#d69ab7"
@@ -804,6 +863,7 @@ class SpineEditor(QWidget):
         self.table.blockSignals(True)
         try:
             item.setForeground(QColor(color))
+            item.setToolTip("Propozycja — oczekuje na zatwierdzenie." if pending else "")
         finally:
             self.table.blockSignals(False)
 
@@ -817,6 +877,9 @@ class SpineEditor(QWidget):
         )
         self.status_indicator.set_state(result.state)
         self.move_merge_button.setEnabled(self._editing and self._merge_target() is not None)
+        self.approve_button.setVisible(self._editing and bool(self.draft.pending_suggestions))
+        self.undo_button.setVisible(self._editing)
+        self.undo_button.setEnabled(self.draft.can_undo)
         instruments = list(
             dict.fromkeys(
                 identity.instrument or "Bez nazwy" for identity in self.problem.editable_identities
