@@ -1605,3 +1605,80 @@ def test_split_move_already_at_start_has_no_replacements() -> None:
 
     assert proposal.replacements == ()
     assert proposal.proposed_cells == ()
+
+
+def make_split_test_draft() -> tuple[HumdrumDocument, FragmentDraft]:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        '*I"Violin 2\t*I"Trumpet\n'
+        "=45\t=45\n"
+        "4c\t4e\n"
+        "*^\t*\n"
+        "4d\t4ryy\t4f\n"
+        "*v\t*v\t*\n"
+        "=46\t=46\n"
+        "*-\t*-\n"
+    )
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    rows = build_fragment_rows(
+        trace,
+        problem,
+        build_measure_view(trace, problem, issues),
+    )
+    return document, FragmentDraft(document, rows)
+
+
+def test_draft_split_move_is_one_undo_and_preserves_prior_edit() -> None:
+    document, draft = make_split_test_draft()
+    draft.edit_token(4, 0, "4g")
+    before_move = draft.to_text()
+
+    proposal = draft.move_split(5, 0)
+
+    assert proposal is not None
+    assert proposal.proposed_cells == ((4, 1),)
+    assert document.to_text() == draft.original_text
+
+    rendered = draft.rendered_lines()
+    extended = next(line for line in rendered if line.source_line == 4)
+    assert extended.text == "4g\t\t4e"
+    assert not any(line.source_line == 5 for line in rendered)
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_move
+
+    assert draft.undo() is True
+    assert draft.to_text() == draft.original_text
+
+
+def test_draft_split_move_allows_editing_both_branches() -> None:
+    _, draft = make_split_test_draft()
+    draft.move_split(5, 0)
+    row_index = next(
+        index for index, line in enumerate(draft.rendered_lines()) if line.source_line == 4
+    )
+
+    assert draft.edit_rendered_token(row_index, 0, "4g") is True
+    assert draft.edit_rendered_token(row_index, 1, "4ryy") is True
+
+    result = validate_draft(draft, start_line=3, end_line=8)
+    assert result.state is ValidationState.VALID
+
+    extended = draft.rendered_lines()[row_index]
+    assert extended.text == "4g\t4ryy\t4e"
+
+
+def test_draft_split_move_keeps_other_instrument_readonly() -> None:
+    _, draft = make_split_test_draft()
+    draft.move_split(5, 0)
+    row_index = next(
+        index for index, line in enumerate(draft.rendered_lines()) if line.source_line == 4
+    )
+    before_edit = draft.to_text()
+
+    with pytest.raises(ValueError, match="tylko do odczytu"):
+        draft.edit_rendered_token(row_index, 2, "4g")
+
+    assert draft.to_text() == before_edit

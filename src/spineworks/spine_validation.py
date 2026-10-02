@@ -903,6 +903,46 @@ class FragmentDraft:
 
         return proposal
 
+    def move_split(
+        self,
+        source_line: int,
+        root_column: int,
+    ) -> "SplitMoveProposal | None":
+        if self._replacements:
+            raise ValueError(
+                "Szkic zawiera już zmianę strukturalną. "
+                "Łączenie takich operacji nie jest jeszcze obsługiwane."
+            )
+
+        candidate = HumdrumDocument.from_text(self.to_text())
+        plan = plan_split_move(candidate, source_line, root_column)
+        trace = trace_spines(candidate)
+        selected = next(row for row in trace.records if row.record.line_number == source_line)
+        column = selected.branches.index(plan.branch)
+
+        if (source_line, column) not in self._editable_cells:
+            raise ValueError("Otwarcie należy do grupy tylko do odczytu.")
+
+        proposal = prepare_split_move(
+            candidate,
+            source_line,
+            root_column,
+        )
+        if not proposal.replacements:
+            return None
+
+        self._remember()
+
+        for replaced_line, replacement in proposal.replacements:
+            self._replacements[replaced_line] = replacement
+
+            # Wcześniejsze edycje są już zawarte w nowych wierszach.
+            for key in list(self._changes):
+                if key[0] == replaced_line:
+                    del self._changes[key]
+
+        return proposal
+
     def edit_rendered_token(
         self,
         row_index: int,
