@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QPushButton,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidget,
@@ -262,6 +263,13 @@ class SpineEditor(QWidget):
         view = build_measure_view(trace, self.problem, issues)
         self.rows = build_fragment_rows(trace, self.problem, view)
         self.draft = FragmentDraft(document, self.rows)
+        self.original_draft = FragmentDraft(document, self.rows)
+        self._editing = False
+
+        self.view_button = QPushButton("Edytuj", self)
+        self.view_button.setObjectName("primaryButton")
+        self.view_button.clicked.connect(self._toggle_view)
+        title_row.insertWidget(1, self.view_button)
         self.title_label.setText(f"Takt {self.problem.measure} · zakres 1 z {len(problems)}")
         self._show_rows()
         self.report.setPlainText(
@@ -327,7 +335,7 @@ class SpineEditor(QWidget):
             if column < 2:
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-            if editable:
+            if editable and self._editing:
                 flags |= Qt.ItemFlag.ItemIsEditable
             item.setFlags(flags)
 
@@ -385,10 +393,15 @@ class SpineEditor(QWidget):
             for cell in row.cells:
                 root = cell.identity.root_column
                 offset = offsets.get(root, 0)
+                token = (
+                    self.draft.token(row.source_line, cell.source_column)
+                    if self._editing
+                    else cell.token
+                )
                 put(
                     table_row,
                     starts[root] + offset,
-                    cell.token,
+                    token,
                     editable=cell.editable,
                     muted=root not in editable_roots,
                     source_cell=(row.source_line, cell.source_column),
@@ -464,6 +477,30 @@ class SpineEditor(QWidget):
                     QHeaderView.ResizeMode.Interactive,
                 )
                 self.table.setColumnWidth(column, required_width)
+
+    def _toggle_view(self) -> None:
+        # Zakończ edycję aktywnego pola przed odczytaniem szkicu.
+        self.view_button.setFocus()
+
+        vertical = self.table.verticalScrollBar().value()
+        horizontal = self.table.horizontalScrollBar().value()
+        current_row = self.table.currentRow()
+        current_column = self.table.currentColumn()
+
+        self._editing = not self._editing
+        self.view_button.setText("Pokaż oryginał" if self._editing else "Edytuj")
+
+        self.table.blockSignals(True)
+        try:
+            self._show_rows()
+            if current_row >= 0 and current_column >= 0:
+                self.table.setCurrentCell(current_row, current_column)
+        finally:
+            self.table.blockSignals(False)
+
+        self.table.verticalScrollBar().setValue(vertical)
+        self.table.horizontalScrollBar().setValue(horizontal)
+        self._update_validation()
 
     def _navigate_cell(
         self,
@@ -562,7 +599,7 @@ class SpineEditor(QWidget):
 
     def _update_validation(self) -> None:
         result = validate_draft(
-            self.draft,
+            self.draft if self._editing else self.original_draft,
             start_line=self.problem.start_line,
             end_line=self.problem.end_line,
         )
