@@ -1796,3 +1796,100 @@ def plan_split_move(
         target_line=target,
         start_barline=start_barline,
     )
+
+
+@dataclass(frozen=True)
+class SplitMoveProposal:
+    replacements: tuple[tuple[int, tuple[DraftLine, ...]], ...]
+    proposed_cells: tuple[tuple[int, int], ...]
+
+
+def prepare_split_move(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+) -> SplitMoveProposal:
+    """Przygotuj przeniesienie *^ bez zmieniania dokumentu."""
+    plan = plan_split_move(document, source_line, root_column)
+
+    if plan.target_line == plan.source_line:
+        return SplitMoveProposal((), ())
+
+    trace = trace_spines(document)
+    rows = {row.record.line_number: row for row in trace.records}
+    replacements: dict[int, tuple[DraftLine, ...]] = {}
+    proposed_cells: list[tuple[int, int]] = []
+
+    target = rows[plan.target_line]
+    target_column = target.branches.index(plan.branch)
+    opening_fields = ["*"] * len(target.branches)
+    opening_fields[target_column] = "*^"
+    opening = DraftLine(
+        source_line=None,
+        text="\t".join(opening_fields),
+        description=(f"nowe: otwarcie {plan.identity.instrument or plan.identity.spine_type}"),
+        anchor_line=plan.target_line,
+    )
+
+    for line_number in range(plan.target_line, plan.source_line):
+        row = rows[line_number]
+        record = row.record
+
+        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            continue
+
+        matching = [column for column, branch in enumerate(row.branches) if branch == plan.branch]
+        if len(matching) != 1:
+            raise HumdrumError(
+                f"Linia {line_number}: gałąź zmieniła strukturę przed pierwotnym otwarciem."
+            )
+
+        column = matching[0]
+        fields = list(record.fields)
+
+        if record.kind is RecordKind.DATA:
+            fill = "" if plan.identity.spine_type == "**kern" else "."
+            proposed_cells.append((line_number, column + 1))
+        elif record.kind is RecordKind.LOCAL_COMMENT:
+            fill = "!"
+        elif record.kind is RecordKind.INTERPRETATION:
+            fill = fields[column]
+            if fill in {"*^", "*v", "*x", "*+", "*-"}:
+                raise HumdrumError(
+                    f"Linia {line_number}: operacja strukturalna w przenoszonej gałęzi."
+                )
+        else:
+            raise HumdrumError(
+                f"Linia {line_number}: nieoczekiwany rekord przed otwarciem rozdwojenia."
+            )
+
+        fields.insert(column + 1, fill)
+        extended = DraftLine(
+            source_line=line_number,
+            text="\t".join(fields),
+        )
+        replacements[line_number] = (
+            (opening, extended) if line_number == plan.target_line else (extended,)
+        )
+
+    selected = rows[plan.source_line]
+    column = selected.branches.index(plan.branch)
+    fields = list(selected.record.fields)
+    fields[column] = "*"
+    fields.insert(column + 1, "*")
+
+    replacements[plan.source_line] = (
+        ()
+        if all(token == "*" for token in fields)
+        else (
+            DraftLine(
+                source_line=plan.source_line,
+                text="\t".join(fields),
+            ),
+        )
+    )
+
+    return SplitMoveProposal(
+        replacements=tuple(sorted(replacements.items())),
+        proposed_cells=tuple(proposed_cells),
+    )

@@ -15,6 +15,7 @@ from spineworks.spine_validation import (
     prepare_closing_block,
     prepare_merge_extension,
     prepare_merge_move,
+    prepare_split_move,
     read_records,
     separate_merge_rows,
     trace_spines,
@@ -1517,3 +1518,90 @@ def test_split_move_rejects_branch_created_after_first_data() -> None:
 
     with pytest.raises(HumdrumError, match="gałąź powstaje"):
         plan_split_move(document, 5, 0)
+
+
+def test_split_move_inserts_opening_and_extends_data() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n4c\n*^\n4d\t4ryy\n*v\t*v\n=2\n*-\n")
+    original = document.to_text()
+
+    proposal = prepare_split_move(document, 4, 0)
+    replacements = dict(proposal.replacements)
+
+    opening, data = replacements[3]
+    assert opening.source_line is None
+    assert opening.anchor_line == 3
+    assert opening.text == "*^"
+    assert data.source_line == 3
+    assert data.text == "4c\t"
+    assert replacements[4] == ()
+    assert proposal.proposed_cells == ((3, 1),)
+    assert document.to_text() == original
+
+
+def test_split_move_fills_comments_and_copies_interpretations() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "=1\n"
+        "!!Komentarz globalny\n"
+        "!Komentarz lokalny\n"
+        "*clefG2\n"
+        "4c\n"
+        "*^\n"
+        "4d\t4ryy\n"
+        "*v\t*v\n"
+        "=2\n"
+        "*-\n"
+    )
+
+    proposal = prepare_split_move(document, 7, 0)
+    replacements = dict(proposal.replacements)
+
+    assert 3 not in replacements
+    assert replacements[4][0].text == "*^"
+    assert replacements[4][1].text == "!Komentarz lokalny\t!"
+    assert replacements[5][0].text == "*clefG2\t*clefG2"
+    assert replacements[6][0].text == "4c\t"
+    assert proposal.proposed_cells == ((6, 1),)
+
+
+def test_split_move_preserves_other_spine_opening_in_source_row() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "=1\t=1\n"
+        "4c\t4e\n"
+        "*^\t*^\n"
+        "4d\t4ryy\t4f\t4ryy\n"
+        "*v\t*v\t*\t*\n"
+        "*\t*v\t*v\n"
+        "=2\t=2\n"
+        "*-\t*-\n"
+    )
+
+    proposal = prepare_split_move(document, 4, 0)
+    replacements = dict(proposal.replacements)
+
+    assert replacements[3][0].text == "*^\t*"
+    assert replacements[3][1].text == "4c\t\t4e"
+    assert replacements[4][0].source_line == 4
+    assert replacements[4][0].text == "*\t*\t*^"
+
+
+def test_split_move_uses_dots_for_non_kern_data() -> None:
+    document = HumdrumDocument.from_text(
+        "**dynam\t**kern\n=1\t=1\np\t4c\n*^\t*\nf\tff\t4d\n*v\t*v\t*\n=2\t=2\n*-\t*-\n"
+    )
+
+    proposal = prepare_split_move(document, 4, 0)
+    replacements = dict(proposal.replacements)
+
+    assert replacements[3][1].text == "p\t.\t4c"
+    assert proposal.proposed_cells == ((3, 1),)
+
+
+def test_split_move_already_at_start_has_no_replacements() -> None:
+    document = HumdrumDocument.from_text("**kern\n=1\n*^\n4c\t4ryy\n*v\t*v\n=2\n*-\n")
+
+    proposal = prepare_split_move(document, 3, 0)
+
+    assert proposal.replacements == ()
+    assert proposal.proposed_cells == ()
