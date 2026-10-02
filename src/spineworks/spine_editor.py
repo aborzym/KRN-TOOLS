@@ -1,12 +1,14 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, QRect, Qt
+from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
+    QAbstractItemDelegate,
     QApplication,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPlainTextEdit,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -18,11 +20,13 @@ from PySide6.QtWidgets import (
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.spine_validation import (
+    FragmentDraft,
     build_fragment_rows,
     build_measure_view,
     find_split_issues,
     group_split_issues,
     trace_spines,
+    validate_draft,
 )
 from spineworks.theme import SPINEWORKS_STYLE
 
@@ -51,6 +55,8 @@ class SpacerHeader(QHeaderView):
 
 
 class CellGridDelegate(QStyledItemDelegate):
+    navigation_requested = Signal(int, int, str)
+
     def __init__(
         self,
         spacers: set[int],
@@ -58,6 +64,95 @@ class CellGridDelegate(QStyledItemDelegate):
     ) -> None:
         super().__init__(parent)
         self.spacers = spacers
+
+    def createEditor(
+        self,
+        parent: QWidget,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> QWidget | None:
+        editor = super().createEditor(parent, option, index)
+
+        if isinstance(editor, QLineEdit):
+            editor.setProperty("table_row", index.row())
+            editor.setProperty("table_column", index.column())
+            brush = index.data(Qt.ItemDataRole.ForegroundRole)
+            color = brush.color().name() if brush is not None else "#dce7f5"
+            editor.setStyleSheet(
+                f"""
+                QLineEdit {{
+                    background: #202b40;
+                    color: {color};
+                    border: 0;
+                    padding: 3px 1px;
+                    selection-background-color: #177245;
+                    selection-color: #ffffff;
+                }}
+                """
+            )
+
+        return editor
+
+    def updateEditorGeometry(
+        self,
+        editor: QWidget,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        editor.setGeometry(option.rect.adjusted(1, 1, -1, -1))
+
+    def setEditorData(
+        self,
+        editor: QWidget,
+        index: QModelIndex,
+    ) -> None:
+        super().setEditorData(editor, index)
+        if isinstance(editor, QLineEdit):
+            editor.selectAll()
+
+    def eventFilter(
+        self,
+        watched: QObject,
+        event: QEvent,
+    ) -> bool:
+        if isinstance(watched, QLineEdit) and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            direction = None
+
+            if key in {Qt.Key.Key_Tab, Qt.Key.Key_Backtab}:
+                backward = key == Qt.Key.Key_Backtab or bool(
+                    event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                )
+                direction = "previous" if backward else "next"
+            elif key == Qt.Key.Key_Up:
+                direction = "up"
+            elif key == Qt.Key.Key_Down:
+                direction = "down"
+            elif (
+                key == Qt.Key.Key_Right
+                and not watched.hasSelectedText()
+                and watched.cursorPosition() == len(watched.text())
+            ):
+                direction = "right"
+            elif (
+                key == Qt.Key.Key_Left
+                and not watched.hasSelectedText()
+                and watched.cursorPosition() == 0
+            ):
+                direction = "left"
+
+            if direction is not None:
+                row = watched.property("table_row")
+                column = watched.property("table_column")
+                self.commitData.emit(watched)
+                self.closeEditor.emit(
+                    watched,
+                    QAbstractItemDelegate.EndEditHint.NoHint,
+                )
+                self.navigation_requested.emit(row, column, direction)
+                return True
+
+        return super().eventFilter(watched, event)
 
     def paint(
         self,
@@ -110,7 +205,13 @@ class SpineEditor(QWidget):
         layout.addWidget(self.title_label)
 
         self.table = QTableWidget(self)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setEditTriggers(
+            QTableWidget.EditTrigger.CurrentChanged
+            | QTableWidget.EditTrigger.SelectedClicked
+            | QTableWidget.EditTrigger.DoubleClicked
+            | QTableWidget.EditTrigger.EditKeyPressed
+            | QTableWidget.EditTrigger.AnyKeyPressed
+        )
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().hide()
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
@@ -153,7 +254,7 @@ class SpineEditor(QWidget):
         self.problem = problems[0]
         view = build_measure_view(trace, self.problem, issues)
         self.rows = build_fragment_rows(trace, self.problem, view)
-
+        self.draft = FragmentDraft(document, self.rows)
         self.title_label.setText(f"Takt {self.problem.measure} · zakres 1 z {len(problems)}")
         self._show_rows()
         self.report.setPlainText(
@@ -161,6 +262,7 @@ class SpineEditor(QWidget):
                 f"Linia {issue.line_number}: {issue.message}" for issue in self.problem.issues
             )
         )
+        self.table.itemChanged.connect(self._edit_item)
 
     def _show_rows(self) -> None:
         identities = sorted(
@@ -199,7 +301,9 @@ class SpineEditor(QWidget):
         self.table.setRowCount(len(self.rows) + 1)
         self.table.setHorizontalHeaderLabels(headers)
         self.table.setShowGrid(False)
-        self.table.setItemDelegate(CellGridDelegate(spacers, self.table))
+        delegate = CellGridDelegate(spacers, self.table)
+        delegate.navigation_requested.connect(self._navigate_cell)
+        self.table.setItemDelegate(delegate)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
         def put(
@@ -209,11 +313,18 @@ class SpineEditor(QWidget):
             *,
             editable: bool = False,
             muted: bool = False,
+            source_cell: tuple[int, int] | None = None,
         ) -> None:
             item = QTableWidgetItem(text)
             if column < 2:
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+            flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            if editable:
+                flags |= Qt.ItemFlag.ItemIsEditable
+            item.setFlags(flags)
+
+            if source_cell is not None:
+                item.setData(Qt.ItemDataRole.UserRole, source_cell)
 
             if editable:
                 item.setBackground(QColor("#202b40"))
@@ -272,6 +383,7 @@ class SpineEditor(QWidget):
                     cell.token,
                     editable=cell.editable,
                     muted=root not in editable_roots,
+                    source_cell=(row.source_line, cell.source_column),
                 )
                 offsets[root] = offset + 1
 
@@ -344,6 +456,106 @@ class SpineEditor(QWidget):
                     QHeaderView.ResizeMode.Interactive,
                 )
                 self.table.setColumnWidth(column, required_width)
+
+    def _navigate_cell(
+        self,
+        row: int,
+        column: int,
+        direction: str,
+    ) -> None:
+        editable = [
+            (r, c)
+            for r in range(self.table.rowCount())
+            for c in range(self.table.columnCount())
+            if (
+                (item := self.table.item(r, c)) is not None
+                and item.flags() & Qt.ItemFlag.ItemIsEditable
+            )
+        ]
+        current = (row, column)
+        target = None
+
+        if direction in {"next", "previous"}:
+            if current in editable:
+                position = editable.index(current)
+                step = 1 if direction == "next" else -1
+                destination = position + step
+                if 0 <= destination < len(editable):
+                    target = editable[destination]
+        elif direction == "right":
+            target = next(
+                ((r, c) for r, c in editable if r == row and c > column),
+                None,
+            )
+        elif direction == "left":
+            target = next(
+                ((r, c) for r, c in reversed(editable) if r == row and c < column),
+                None,
+            )
+        elif direction == "down":
+            target = next(
+                ((r, c) for r, c in editable if c == column and r > row),
+                None,
+            )
+        elif direction == "up":
+            target = next(
+                ((r, c) for r, c in reversed(editable) if c == column and r < row),
+                None,
+            )
+
+        if target is None:
+            target = current
+
+        item = self.table.item(*target)
+        if item is not None:
+            self.table.setCurrentItem(item)
+            self.table.scrollToItem(item)
+            self.table.editItem(item)
+
+    def _edit_item(self, item: QTableWidgetItem) -> None:
+        source_cell = item.data(Qt.ItemDataRole.UserRole)
+        if source_cell is None:
+            return
+
+        source_line, source_column = source_cell
+
+        try:
+            self.draft.edit_token(
+                source_line,
+                source_column,
+                item.text(),
+            )
+        except ValueError as error:
+            self.table.blockSignals(True)
+            try:
+                item.setText(self.draft.token(source_line, source_column))
+            finally:
+                self.table.blockSignals(False)
+            self.report.setPlainText(str(error))
+            return
+
+        text = item.text()
+        if text.startswith("!"):
+            color = "#dfa060"
+        elif text in {"*^", "*v"}:
+            color = "#d69ab7"
+        elif text.startswith("*"):
+            color = "#a98bbf"
+        else:
+            color = "#dce7f5"
+
+        self.table.blockSignals(True)
+        try:
+            item.setForeground(QColor(color))
+        finally:
+            self.table.blockSignals(False)
+
+        result = validate_draft(
+            self.draft,
+            start_line=self.problem.start_line,
+            end_line=self.problem.end_line,
+        )
+        self.report.setPlainText("\n".join(result.messages))
 
 
 def main() -> int:
