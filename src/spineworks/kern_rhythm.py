@@ -27,16 +27,23 @@ def kern_duration(token: str) -> Fraction | None:
             durations.append(Fraction(0))
             continue
 
-        match = re.search(r"([0-9]+)(\.*)", component)
+        match = re.search(r"([0-9]+)(?:%([0-9]+))?(\.*)", component)
         if match is None:
             raise HumdrumError(f"Nie można odczytać długości tokenu **kern: {component!r}.")
 
+        reciprocal, numerator_text, dots = match.groups()
+
         if "%" in component:
-            raise HumdrumError("Ułamkowy zapis rytmu z % nie jest jeszcze obsługiwany.")
+            if numerator_text is None or component.count("%") != 1:
+                raise HumdrumError(f"Nieprawidłowy ułamkowy zapis rytmu: {component!r}.")
 
-        reciprocal, dots = match.groups()
+            denominator = int(reciprocal)
+            numerator = int(numerator_text)
+            if denominator <= 0 or numerator <= 0:
+                raise HumdrumError("Licznik i mianownik długości muszą być dodatnie.")
 
-        if set(reciprocal) == {"0"}:
+            duration = Fraction(numerator, denominator)
+        elif set(reciprocal) == {"0"}:
             duration = Fraction(2 ** len(reciprocal))
         else:
             denominator = int(reciprocal)

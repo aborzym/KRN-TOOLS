@@ -56,7 +56,6 @@ def test_null_token_has_no_new_duration() -> None:
         "4c 8e",
         "8cq 8e",
         "03c",
-        "3%2c",
     ],
 )
 def test_rejects_invalid_or_unsupported_rhythm(token: str) -> None:
@@ -174,3 +173,31 @@ def test_rejects_invalid_row_timing(
 ) -> None:
     with pytest.raises(HumdrumError):
         advance_kern_row(tokens, remaining)
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        ("8%9r", Fraction(9, 8)),
+        ("8%9ryy", Fraction(9, 8)),
+        ("3%2c", Fraction(2, 3)),
+        ("8%3r", Fraction(3, 8)),
+        ("4%5r", Fraction(5, 4)),
+        ("8%3.r", Fraction(9, 16)),
+        ("8%9c 8%9e", Fraction(9, 8)),
+    ],
+)
+def test_reads_fractional_kern_duration(
+    token: str,
+    expected: Fraction,
+) -> None:
+    assert kern_duration(token) == expected
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["8%r", "8%0r", "0%9r", "8%9%2r"],
+)
+def test_rejects_invalid_fractional_duration(token: str) -> None:
+    with pytest.raises(HumdrumError):
+        kern_duration(token)
