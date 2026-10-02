@@ -419,3 +419,30 @@ def test_does_not_fold_intermediate_measure_containing_an_issue() -> None:
     assert trace.issue is None
     assert [item.measure for item in view] == ["43", "44", "45"]
     assert all(not item.collapsed for item in view)
+
+
+def test_multiple_merges_do_not_pull_in_earlier_opening_measures() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        "=44\t=44\t=44\n"
+        "*^\t*\t*^\n"
+        "1c\t1ryy\tp\t1e\t1ryy\n"
+        "=45\t=45\t=45\t=45\t=45\n"
+        "1d\t1ryy\t.\t1f\t1ryy\n"
+        "*v\t*v\t*\t*v\t*v\n"
+        "=46\t=46\t=46\n"
+        "*-\t*-\t*-\n"
+    )
+
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    view = build_measure_view(trace, problem, issues)
+
+    assert trace.issue is None
+    assert [issue.code for issue in issues] == ["multiple_merges"]
+    assert len(view) == 1
+    assert view[0].measure == "45"
+    assert view[0].start_line == 5
+    assert view[0].end_line == 8
+    assert view[0].collapsed is False

@@ -521,6 +521,10 @@ def build_measure_view(
     opening_lines: set[int] = set()
 
     for issue in problem.issues:
+        # Ordering and separating closing rows require only the problem measure.
+        if issue.code not in {"late_split", "early_merge"}:
+            continue
+
         row = rows_by_line[issue.line_number]
         affected = set(issue.identities)
 
