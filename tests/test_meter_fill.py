@@ -2,9 +2,13 @@ from fractions import Fraction
 
 import pytest
 
-from spineworks.humdrum import HumdrumError
+from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.meter_rhythm import MeterSignature, meter_rest_options
-from spineworks.spine_rhythm import TimedRecord, _meter_fill_tokens
+from spineworks.spine_rhythm import (
+    TimedRecord,
+    _meter_fill_tokens,
+    suggest_merge_fill,
+)
 
 
 def test_four_four_fill_respects_half_measure_boundary() -> None:
@@ -127,3 +131,45 @@ def test_no_rest_needed_when_voice_sounds_until_end() -> None:
     )
 
     assert tokens == {10: "."}
+
+
+def test_merge_fill_uses_meter_grouping_after_first_quarter() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "*M4/4\t*M4/4\n"
+        "=1\t=1\n"
+        "*^\t*\n"
+        "4c\t4ryy\t4g\n"
+        "*v\t*v\t*\n"
+        "4d\t4a\n"
+        "4e\t4b\n"
+        "4f\t4cc\n"
+        "=2\t=2\n"
+        "*-\t*-\n"
+    )
+    option = meter_rest_options(MeterSignature(4, 4))[0]
+    original = document.to_text()
+
+    suggestions = suggest_merge_fill(
+        document,
+        6,
+        0,
+        rest_option=option,
+    )
+
+    assert tuple((item.source_line, item.source_column, item.token) for item in suggestions) == (
+        (7, 1, "4ryy"),
+        (8, 1, "2ryy"),
+        (9, 1, "."),
+    )
+    assert document.to_text() == original
+
+
+def test_merge_fill_rejects_option_for_different_meter() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n*M4/4\n=1\n*^\n4c\t4ryy\n*v\t*v\n4d\n4e\n4f\n=2\n*-\n"
+    )
+    option = meter_rest_options(MeterSignature(3, 4))[0]
+
+    with pytest.raises(HumdrumError, match="nie odpowiada metrum"):
+        suggest_merge_fill(document, 6, 0, rest_option=option)

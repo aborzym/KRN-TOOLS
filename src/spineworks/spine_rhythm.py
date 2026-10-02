@@ -195,6 +195,8 @@ def suggest_merge_fill(
     document: HumdrumDocument,
     source_line: int,
     root_column: int,
+    *,
+    rest_option: MeterRestOption | None = None,
 ) -> tuple[TokenSuggestion, ...]:
     """Zaproponuj wypełnienie dodatkowych głosów bez edycji dokumentu."""
     plan = plan_merge_move(document, source_line, root_column)
@@ -229,6 +231,45 @@ def suggest_merge_fill(
         merge_time.onset + merge_time.remaining_before[column] for column in columns[1:]
     ]
     measure_end = times[plan.end_barline].onset
+
+    if rest_option is not None:
+        meter = meter_at_line(document, source_line, root_column)
+        if rest_option.meter != meter:
+            raise HumdrumError("Wybrany podział pauz nie odpowiada metrum instrumentu.")
+
+        preceding_barlines = [
+            row.record.line_number
+            for row in structure.records
+            if row.record.kind is RecordKind.BARLINE and row.record.line_number < source_line
+        ]
+        measure_start = times[preceding_barlines[-1]].onset if preceding_barlines else Fraction(0)
+        timed_rows = tuple(times[row.source_line] for row in data_rows)
+        suggestions: list[TokenSuggestion] = []
+
+        for slot in range(len(active_until)):
+            tokens = _meter_fill_tokens(
+                timed_rows,
+                option=rest_option,
+                measure_start=measure_start,
+                active_until=active_until[slot],
+                end_time=measure_end,
+            )
+
+            for row in data_rows:
+                suggestions.append(
+                    TokenSuggestion(
+                        source_line=row.source_line,
+                        source_column=row.proposed_columns[slot],
+                        token=tokens[row.source_line],
+                    )
+                )
+
+        return tuple(
+            sorted(
+                suggestions,
+                key=lambda item: (item.source_line, item.source_column),
+            )
+        )
 
     boundaries = sorted(
         {times[row.source_line].onset for row in data_rows} | {measure_end},
