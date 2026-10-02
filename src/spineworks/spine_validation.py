@@ -1128,40 +1128,37 @@ class FragmentDraft:
         source_line: int,
         root_column: int,
     ) -> "SplitMoveProposal | None":
-        if self._replacements:
-            raise ValueError(
-                "Szkic zawiera już zmianę strukturalną. "
-                "Łączenie takich operacji nie jest jeszcze obsługiwane."
-            )
-
-        candidate = HumdrumDocument.from_text(self.to_text())
-        plan = plan_split_move(candidate, source_line, root_column)
-        trace = trace_spines(candidate)
-        selected = next(row for row in trace.records if row.record.line_number == source_line)
-        column = selected.branches.index(plan.branch)
-
-        if (source_line, column) not in self._editable_cells:
+        if root_column not in self._editable_roots or not any(
+            line == source_line for line, _ in self._editable_cells
+        ):
             raise ValueError("Otwarcie należy do grupy tylko do odczytu.")
 
+        rendered = self.rendered_lines()
+        current_line = self.rendered_index(source_line) + 1
+        candidate = HumdrumDocument.from_text(self.to_text())
         proposal = prepare_split_move(
             candidate,
-            source_line,
+            current_line,
             root_column,
         )
+
         if not proposal.replacements:
             return None
 
-        self._remember()
+        proposed_cells: list[tuple[int, int]] = []
+        for number, column in proposal.proposed_cells:
+            original_number = rendered[number - 1].source_line
+            if original_number is None:
+                raise HumdrumError("Pole do uzupełnienia nie ma numeru źródłowego.")
+            proposed_cells.append((original_number, column))
 
-        for replaced_line, replacement in proposal.replacements:
-            self._replacements[replaced_line] = replacement
+        if not self._apply_candidate_replacements(proposal.replacements):
+            return None
 
-            # Wcześniejsze edycje są już zawarte w nowych wierszach.
-            for key in list(self._changes):
-                if key[0] == replaced_line:
-                    del self._changes[key]
-
-        return proposal
+        return SplitMoveProposal(
+            replacements=proposal.replacements,
+            proposed_cells=tuple(proposed_cells),
+        )
 
     def edit_rendered_token(
         self,

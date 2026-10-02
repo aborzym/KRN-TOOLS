@@ -2085,3 +2085,60 @@ def test_applying_empty_replacement_group_is_noop() -> None:
 
     assert draft._apply_candidate_replacements(()) is False
     assert draft.can_undo is False
+
+
+def test_move_split_supports_successive_operations_by_source_number() -> None:
+    draft, _ = make_pending_split_preview(1)
+    before_first = draft.to_text()
+
+    first = draft.move_split(5, 0)
+    assert first is not None
+    assert first.proposed_cells == ((4, 1),)
+    assert draft.pending_suggestions == ((4, 2),)
+
+    draft.propose_token(4, 1, "4ryy")
+    before_second = draft.to_text()
+
+    # Numer 5 pochodzi nadal z oryginalnego pliku.
+    second = draft.move_split(5, 1)
+    assert second is not None
+    assert second.proposed_cells == ((4, 3),)
+    assert draft.pending_suggestions == ((4, 1), (4, 2))
+
+    extended = draft.rendered_lines()[draft.rendered_index(4)]
+    assert extended.text == "4ryy\t4ryy\t4e\t"
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_second
+    assert draft.pending_suggestions == ((4, 1), (4, 2))
+
+    assert draft.undo() is True
+    assert draft.pending_suggestions == ((4, 2),)
+
+    assert draft.undo() is True
+    assert draft.to_text() == before_first
+    assert draft.pending_suggestions == ((4, 1),)
+
+
+def test_move_split_rejects_readonly_instrument_without_changes() -> None:
+    _, draft = make_split_test_draft()
+    before = draft.to_text()
+
+    with pytest.raises(ValueError, match="tylko do odczytu"):
+        draft.move_split(5, 1)
+
+    assert draft.to_text() == before
+    assert draft.can_undo is False
+
+
+def test_move_split_reports_source_row_removed_by_previous_operation() -> None:
+    _, draft = make_split_test_draft()
+    draft.move_split(5, 0)
+    before = draft.to_text()
+
+    with pytest.raises(ValueError, match="usunięta lub zastąpiona"):
+        draft.move_split(5, 0)
+
+    assert draft.to_text() == before
+    assert draft.undo() is True
+    assert draft.to_text() == draft.original_text
