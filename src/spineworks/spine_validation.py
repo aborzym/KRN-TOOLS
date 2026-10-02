@@ -711,6 +711,21 @@ class FragmentDraft:
     def can_undo(self) -> bool:
         return bool(self._undo)
 
+    @property
+    def missing_data_cells(self) -> tuple[tuple[int, int], ...]:
+        missing: list[tuple[int, int]] = []
+
+        for row_index, line in enumerate(self.rendered_lines()):
+            record = read_records(line.text)[0]
+            if record.kind is not RecordKind.DATA:
+                continue
+
+            for column, token in enumerate(record.fields):
+                if token == "":
+                    missing.append((row_index, column))
+
+        return tuple(missing)
+
     def token(self, source_line: int, source_column: int) -> str:
         key = (source_line, source_column)
         if key in self._changes:
@@ -1022,6 +1037,19 @@ def validate_draft(
         if line.source_line is not None:
             return f"Linia {line.source_line}"
         return line.description or "Nowy wiersz"
+
+    missing_messages = tuple(
+        f"{location(row_index + 1)}: Puste pole danych "
+        f"w kolumnie {column + 1} — wymaga uzupełnienia."
+        for row_index, column in draft.missing_data_cells
+        if current_start <= row_index + 1 <= current_end
+    )
+
+    if missing_messages:
+        return DraftValidation(
+            state=ValidationState.ERROR,
+            messages=missing_messages,
+        )
 
     try:
         document = HumdrumDocument.from_text(draft.to_text())

@@ -1175,3 +1175,35 @@ def test_both_extended_branches_are_editable() -> None:
     assert draft.edit_rendered_token(row_index, 0, "2e 2g") is True
     assert draft.edit_rendered_token(row_index, 1, "2ryy") is True
     assert draft.rendered_lines()[row_index].text == "2e 2g\t2ryy\tf\t2a\t2ryy"
+
+
+def test_missing_data_cells_follow_filling_and_undo() -> None:
+    _, draft = make_test_draft()
+    assert draft.missing_data_cells == ()
+
+    draft.move_merge(6, 0)
+    row_index = next(
+        index for index, line in enumerate(draft.rendered_lines()) if line.source_line == 7
+    )
+    assert draft.missing_data_cells == ((row_index, 1),)
+
+    draft.edit_rendered_token(row_index, 1, "2ryy")
+    assert draft.missing_data_cells == ()
+
+    assert draft.undo() is True
+    assert draft.missing_data_cells == ((row_index, 1),)
+
+    assert draft.undo() is True
+    assert draft.missing_data_cells == ()
+
+
+def test_missing_data_cells_accept_null_token() -> None:
+    _, draft = make_test_draft()
+    draft.move_merge(6, 0)
+    row_index = next(
+        index for index, line in enumerate(draft.rendered_lines()) if line.source_line == 7
+    )
+
+    draft.edit_rendered_token(row_index, 1, ".")
+
+    assert draft.missing_data_cells == ()
