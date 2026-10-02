@@ -3,7 +3,11 @@ from fractions import Fraction
 import pytest
 
 from spineworks.humdrum import HumdrumError
-from spineworks.kern_rhythm import hidden_rest_token, kern_duration
+from spineworks.kern_rhythm import (
+    advance_kern_row,
+    hidden_rest_token,
+    kern_duration,
+)
 
 
 @pytest.mark.parametrize(
@@ -92,3 +96,81 @@ def test_rejects_duration_unsuitable_for_single_rest(
 ) -> None:
     with pytest.raises(HumdrumError):
         hidden_rest_token(duration)
+
+
+def test_row_advances_by_shortest_active_duration() -> None:
+    elapsed, remaining = advance_kern_row(
+        ("2c", "4e"),
+        (Fraction(0), Fraction(0)),
+    )
+
+    assert elapsed == Fraction(1, 4)
+    assert remaining == (Fraction(1, 4), Fraction(0))
+
+
+def test_null_token_continues_longer_note() -> None:
+    elapsed, remaining = advance_kern_row(
+        (".", "4f"),
+        (Fraction(1, 4), Fraction(0)),
+    )
+
+    assert elapsed == Fraction(1, 4)
+    assert remaining == (Fraction(0), Fraction(0))
+
+
+def test_grace_row_does_not_advance_time() -> None:
+    elapsed, remaining = advance_kern_row(
+        ("8cq", "."),
+        (Fraction(0), Fraction(1, 4)),
+    )
+
+    assert elapsed == 0
+    assert remaining == (Fraction(0), Fraction(1, 4))
+
+
+def test_grace_note_preserves_active_duration() -> None:
+    elapsed, remaining = advance_kern_row(
+        ("8cq", "8eq"),
+        (Fraction(1, 4), Fraction(0)),
+    )
+
+    assert elapsed == 0
+    assert remaining == (Fraction(1, 4), Fraction(0))
+
+
+def test_regular_note_in_grace_row_starts_without_advancing_time() -> None:
+    elapsed, remaining = advance_kern_row(
+        ("8cq", "4e"),
+        (Fraction(0), Fraction(0)),
+    )
+
+    assert elapsed == 0
+    assert remaining == (Fraction(0), Fraction(1, 4))
+
+
+def test_null_token_without_active_note_is_allowed_in_grace_row() -> None:
+    elapsed, remaining = advance_kern_row(
+        ("8cq", "."),
+        (Fraction(0), Fraction(0)),
+    )
+
+    assert elapsed == 0
+    assert remaining == (Fraction(0), Fraction(0))
+
+
+@pytest.mark.parametrize(
+    ("tokens", "remaining"),
+    [
+        ((), ()),
+        (("4c",), (Fraction(0), Fraction(0))),
+        (("4c",), (Fraction(-1, 4),)),
+        ((".",), (Fraction(0),)),
+        (("4c",), (Fraction(1, 8),)),
+    ],
+)
+def test_rejects_invalid_row_timing(
+    tokens: tuple[str, ...],
+    remaining: tuple[Fraction, ...],
+) -> None:
+    with pytest.raises(HumdrumError):
+        advance_kern_row(tokens, remaining)

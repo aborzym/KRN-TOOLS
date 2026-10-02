@@ -86,3 +86,50 @@ def hidden_rest_token(duration: Fraction) -> str:
 
         return f"{reciprocal}{'.' * dot_count}ryy"
     raise HumdrumError("Ta długość wymaga kilku ukrytych pauz lub nieobsługiwanego zapisu rytmu.")
+
+
+def advance_kern_row(
+    tokens: tuple[str, ...],
+    remaining: tuple[Fraction, ...],
+) -> tuple[Fraction, tuple[Fraction, ...]]:
+    """Oblicz czas wiersza i pozostałe długości aktywnych głosów."""
+    if not tokens or len(tokens) != len(remaining):
+        raise HumdrumError("Liczba tokenów **kern nie odpowiada liczbie aktywnych głosów.")
+
+    if any(value < 0 for value in remaining):
+        raise HumdrumError("Pozostała długość głosu nie może być ujemna.")
+
+    durations = tuple(kern_duration(token) for token in tokens)
+    has_grace = any(duration == 0 for duration in durations)
+    active = list(remaining)
+
+    for column, duration in enumerate(durations):
+        if duration is None:
+            if active[column] == 0 and not has_grace:
+                raise HumdrumError(
+                    f"Głos {column + 1}: kropka nie kontynuuje żadnej aktywnej wartości rytmicznej."
+                )
+            continue
+
+        if duration == 0:
+            # Przednutka nie kasuje trwającej wartości tego głosu.
+            continue
+
+        if active[column] > 0:
+            raise HumdrumError(
+                f"Głos {column + 1}: nowy token zaczyna się "
+                "przed zakończeniem poprzedniej wartości."
+            )
+
+        active[column] = duration
+
+    if has_grace:
+        return Fraction(0), tuple(active)
+
+    positive = [value for value in active if value > 0]
+    if not positive:
+        raise HumdrumError("Nie można ustalić czasu wiersza danych **kern.")
+
+    elapsed = min(positive)
+    following = tuple(max(Fraction(0), value - elapsed) for value in active)
+    return elapsed, following
