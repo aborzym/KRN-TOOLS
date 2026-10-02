@@ -3,7 +3,7 @@ from fractions import Fraction
 import pytest
 
 from spineworks.humdrum import HumdrumError
-from spineworks.meter_rhythm import MeterSignature, parse_meter
+from spineworks.meter_rhythm import MeterRestOption, MeterSignature, meter_rest_options, parse_meter
 
 
 @pytest.mark.parametrize(
@@ -76,3 +76,73 @@ def test_meter_cannot_have_nonpositive_values(
 ) -> None:
     with pytest.raises(HumdrumError):
         MeterSignature(numerator, denominator)
+
+
+@pytest.mark.parametrize("numerator", [6, 9, 12])
+def test_compound_eighth_meter_offers_two_rest_styles(numerator: int) -> None:
+    meter = MeterSignature(numerator, 8)
+
+    options = meter_rest_options(meter)
+
+    assert tuple(option.key for option in options) == (
+        "quarter_eighth",
+        "dotted",
+    )
+    assert all(option.groups == (3,) * (numerator // 3) for option in options)
+    assert options[0].split_three_units is True
+    assert options[1].split_three_units is False
+
+
+def test_six_four_offers_both_groupings() -> None:
+    options = meter_rest_options(MeterSignature(6, 4))
+
+    assert tuple(option.groups for option in options) == (
+        (3, 3),
+        (2, 2, 2),
+    )
+    assert all(option.split_three_units is False for option in options)
+
+
+@pytest.mark.parametrize(
+    ("numerator", "groups"),
+    [
+        (2, (1, 1)),
+        (3, (2, 1)),
+        (4, (2, 2)),
+    ],
+)
+def test_simple_meter_has_one_standard_grouping(
+    numerator: int,
+    groups: tuple[int, ...],
+) -> None:
+    options = meter_rest_options(MeterSignature(numerator, 4))
+
+    assert len(options) == 1
+    assert options[0].groups == groups
+    assert options[0].split_three_units is False
+
+
+def test_rejects_groups_not_matching_meter() -> None:
+    with pytest.raises(HumdrumError):
+        MeterRestOption(
+            meter=MeterSignature(6, 8),
+            key="invalid",
+            label="Nieprawidłowy podział",
+            groups=(3, 2),
+        )
+
+
+def test_rejects_quarter_eighth_style_in_six_four() -> None:
+    with pytest.raises(HumdrumError):
+        MeterRestOption(
+            meter=MeterSignature(6, 4),
+            key="invalid",
+            label="Nieprawidłowy podział",
+            groups=(3, 3),
+            split_three_units=True,
+        )
+
+
+def test_unknown_grouping_requires_explicit_rules() -> None:
+    with pytest.raises(HumdrumError, match="nie ustalono"):
+        meter_rest_options(MeterSignature(5, 4))
