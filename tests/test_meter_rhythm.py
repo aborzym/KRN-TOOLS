@@ -3,7 +3,13 @@ from fractions import Fraction
 import pytest
 
 from spineworks.humdrum import HumdrumError
-from spineworks.meter_rhythm import MeterRestOption, MeterSignature, meter_rest_options, parse_meter
+from spineworks.meter_rhythm import (
+    MeterRestOption,
+    MeterSignature,
+    meter_rest_options,
+    parse_meter,
+    plan_meter_rests,
+)
 
 
 @pytest.mark.parametrize(
@@ -146,3 +152,104 @@ def test_rejects_quarter_eighth_style_in_six_four() -> None:
 def test_unknown_grouping_requires_explicit_rules() -> None:
     with pytest.raises(HumdrumError, match="nie ustalono"):
         meter_rest_options(MeterSignature(5, 4))
+
+
+@pytest.mark.parametrize(
+    ("signature", "option_key", "start", "end", "expected"),
+    [
+        # 4/4: po pierwszej ćwierćnucie — ćwierćnuta i półnuta.
+        ((4, 4), "standard", Fraction(1, 4), Fraction(1), ("4ryy", "2ryy")),
+        # 3/4: od drugiej miary — dwie ćwierćnuty.
+        ((3, 4), "standard", Fraction(1, 4), Fraction(3, 4), ("4ryy", "4ryy")),
+        # 3/4: pierwsze dwie miary — półnuta.
+        ((3, 4), "standard", Fraction(0), Fraction(1, 2), ("2ryy",)),
+        # 3/4: cały takt — półnuta z kropką.
+        ((3, 4), "standard", Fraction(0), Fraction(3, 4), ("2.ryy",)),
+        # 6/8: druga połowa według praktyki rękopisu.
+        (
+            (6, 8),
+            "quarter_eighth",
+            Fraction(3, 8),
+            Fraction(3, 4),
+            ("4ryy", "8ryy"),
+        ),
+        # 6/8: po pierwszej ósemce, z podziałem ćwierćnuta–ósemka.
+        (
+            (6, 8),
+            "quarter_eighth",
+            Fraction(1, 8),
+            Fraction(3, 4),
+            ("8ryy", "8ryy", "4ryy", "8ryy"),
+        ),
+        # 6/8: druga połowa jako ćwierćnuta z kropką.
+        (
+            (6, 8),
+            "dotted",
+            Fraction(3, 8),
+            Fraction(3, 4),
+            ("4.ryy",),
+        ),
+        # 6/4: druga połowa przy podziale 3+3.
+        (
+            (6, 4),
+            "three_plus_three",
+            Fraction(3, 4),
+            Fraction(3, 2),
+            ("2.ryy",),
+        ),
+        # 6/4: ten sam zakres przy podziale 2+2+2.
+        (
+            (6, 4),
+            "two_plus_two_plus_two",
+            Fraction(3, 4),
+            Fraction(3, 2),
+            ("4ryy", "2ryy"),
+        ),
+        # 9/8: cały takt, zapis ułamkowy.
+        ((9, 8), "dotted", Fraction(0), Fraction(9, 8), ("8%9ryy",)),
+    ],
+)
+def test_plans_rests_according_to_meter_and_position(
+    signature: tuple[int, int],
+    option_key: str,
+    start: Fraction,
+    end: Fraction,
+    expected: tuple[str, ...],
+) -> None:
+    meter = MeterSignature(*signature)
+    option = next(item for item in meter_rest_options(meter) if item.key == option_key)
+
+    rests = plan_meter_rests(option, start, end)
+
+    assert tuple(rest.token for rest in rests) == expected
+    assert sum((rest.duration for rest in rests), Fraction(0)) == end - start
+
+    position = start
+    for rest in rests:
+        assert rest.onset == position
+        position += rest.duration
+    assert position == end
+
+
+def test_empty_rest_range_produces_no_tokens() -> None:
+    option = meter_rest_options(MeterSignature(4, 4))[0]
+
+    assert plan_meter_rests(option, Fraction(1, 4), Fraction(1, 4)) == ()
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (Fraction(-1, 4), Fraction(1)),
+        (Fraction(0), Fraction(5, 4)),
+        (Fraction(1, 2), Fraction(1, 4)),
+    ],
+)
+def test_rejects_rest_range_outside_measure(
+    start: Fraction,
+    end: Fraction,
+) -> None:
+    option = meter_rest_options(MeterSignature(4, 4))[0]
+
+    with pytest.raises(HumdrumError, match="Zakres pauz"):
+        plan_meter_rests(option, start, end)

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 
 from spineworks.humdrum import HumdrumError
+from spineworks.kern_rhythm import hidden_rest_token
 
 
 @dataclass(frozen=True)
@@ -121,3 +122,68 @@ def meter_rest_options(
             groups=groups,
         ),
     )
+
+
+@dataclass(frozen=True)
+class MeterRest:
+    onset: Fraction
+    duration: Fraction
+    token: str
+
+
+def plan_meter_rests(
+    option: MeterRestOption,
+    start: Fraction,
+    end: Fraction,
+) -> tuple[MeterRest, ...]:
+    """Rozpisz ciszę zgodnie z pozycją w takcie i wybranym grupowaniem."""
+    meter = option.meter
+    if not Fraction(0) <= start <= end <= meter.duration:
+        raise HumdrumError("Zakres pauz wykracza poza takt.")
+
+    if start == end:
+        return ()
+
+    def make_rest(onset: Fraction, duration: Fraction) -> MeterRest:
+        try:
+            token = hidden_rest_token(duration)
+        except HumdrumError:
+            # Całotaktowe pauzy mogą wymagać zapisu ułamkowego, np. 8%9.
+            token = f"{duration.denominator}%{duration.numerator}ryy"
+        return MeterRest(onset=onset, duration=duration, token=token)
+
+    if start == 0 and end == meter.duration:
+        return (make_rest(start, end - start),)
+
+    unit = Fraction(1, meter.denominator)
+    result: list[MeterRest] = []
+    group_start = Fraction(0)
+
+    for group in option.groups:
+        group_end = group_start + group * unit
+        position = max(start, group_start)
+        limit = min(end, group_end)
+
+        while position < limit:
+            if not option.split_three_units and position == group_start and limit == group_end:
+                duration = group_end - group_start
+            else:
+                # Wybierz największą wartość mieszczącą się w grupie
+                # i zaczynającą na właściwej granicy rytmicznej.
+                units = Fraction(1)
+                available = (limit - position) / unit
+                offset = (position - group_start) / unit
+
+                while units * 2 <= available:
+                    units *= 2
+                while units > available or (offset / units).denominator != 1:
+                    units /= 2
+
+                duration = units * unit
+
+            result.append(make_rest(position, duration))
+            position += duration
+
+        group_start = group_end
+
+    return tuple(result)
