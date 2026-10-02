@@ -1,6 +1,7 @@
 from spineworks.humdrum import HumdrumDocument
 from spineworks.spine_validation import (
     RecordKind,
+    build_measure_view,
     find_split_issues,
     group_split_issues,
     read_records,
@@ -356,3 +357,65 @@ def test_omits_helper_split_unchanged_through_problem_measure() -> None:
 
     # Bassoon still contributes two fields to the complete source record.
     assert trace.records[7].record.spine_count == 4
+
+
+def test_preserves_opening_lines_through_nested_merges() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n=44\n*^\n1c\t1e\n=45\t=45\n*^\t*\n1d\t1f\t1a\n*v\t*v\t*\n*v\t*v\n=46\n*-\n"
+    )
+
+    trace = trace_spines(document)
+
+    assert trace.issue is None
+    assert [branch.opening_lines for branch in trace.records[6].branches] == [(3, 6), (3, 6), (3,)]
+    assert [branch.opening_lines for branch in trace.records[8].branches] == [(3,), (3,)]
+    assert trace.records[9].branches[0].opening_lines == ()
+
+
+def test_shows_opening_and_problem_measures_and_folds_middle() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n=43\n*^\n1c\t1ryy\n=44\t=44\n1d\t1ryy\n=45\t=45\n2e\t2ryy\n*v\t*v\n2f\n=46\n*-\n"
+    )
+
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problem = group_split_issues(trace, issues)[0]
+    view = build_measure_view(trace, problem, issues)
+
+    assert trace.issue is None
+    assert [item.measure for item in view] == ["43", "44", "45"]
+    assert [item.collapsed for item in view] == [False, True, False]
+    assert [(item.start_line, item.end_line) for item in view] == [
+        (2, 5),
+        (5, 7),
+        (7, 11),
+    ]
+
+
+def test_does_not_fold_intermediate_measure_containing_an_issue() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "=43\n"
+        "*^\n"
+        "1c\t1ryy\n"
+        "=44\t=44\n"
+        "2d\t2ryy\n"
+        "*^\t*\n"
+        "2e\t2ryy\t.\n"
+        "=45\t=45\t=45\n"
+        "2f\t2ryy\t2ryy\n"
+        "*v\t*v\t*v\n"
+        "2g\n"
+        "=46\n"
+        "*-\n"
+    )
+
+    trace = trace_spines(document)
+    issues = find_split_issues(trace)
+    problems = group_split_issues(trace, issues)
+    problem = next(item for item in problems if item.measure == "45")
+    view = build_measure_view(trace, problem, issues)
+
+    assert trace.issue is None
+    assert [item.measure for item in view] == ["43", "44", "45"]
+    assert all(not item.collapsed for item in view)

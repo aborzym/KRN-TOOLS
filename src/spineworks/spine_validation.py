@@ -74,6 +74,7 @@ class SpineIdentity:
 class SpineBranch:
     identity: SpineIdentity
     path: tuple[int, ...] = ()
+    opening_lines: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -130,7 +131,11 @@ def _merge_branch_group(
         relative_paths.remove(right)
         relative_paths.add(parent)
 
-    return SpineBranch(identity, common)
+    return SpineBranch(
+        identity=identity,
+        path=common,
+        opening_lines=branches[0].opening_lines[: len(common)],
+    )
 
 
 def trace_spines(document: HumdrumDocument) -> SpineTrace:
@@ -217,10 +222,19 @@ def trace_spines(document: HumdrumDocument) -> SpineTrace:
             branch = active[column]
 
             if token == "*^":
+                opening_lines = branch.opening_lines + (record.line_number,)
                 following.extend(
                     (
-                        SpineBranch(branch.identity, branch.path + (0,)),
-                        SpineBranch(branch.identity, branch.path + (1,)),
+                        SpineBranch(
+                            identity=branch.identity,
+                            path=branch.path + (0,),
+                            opening_lines=opening_lines,
+                        ),
+                        SpineBranch(
+                            identity=branch.identity,
+                            path=branch.path + (1,),
+                            opening_lines=opening_lines,
+                        ),
                     )
                 )
                 column += 1
@@ -486,3 +500,85 @@ def group_split_issues(
         )
 
     return tuple(ranges)
+
+
+@dataclass(frozen=True)
+class MeasureSlice:
+    measure: str | None
+    start_line: int
+    end_line: int
+    collapsed: bool
+
+
+def build_measure_view(
+    trace: SpineTrace,
+    problem: ProblemRange,
+    all_issues: tuple[SplitIssue, ...],
+) -> tuple[MeasureSlice, ...]:
+    """Plan visible measures and foldable intermediate measures."""
+    rows = trace.records
+    rows_by_line = {row.record.line_number: row for row in rows}
+    opening_lines: set[int] = set()
+
+    for issue in problem.issues:
+        row = rows_by_line[issue.line_number]
+        affected = set(issue.identities)
+
+        for token, branch in zip(
+            row.record.fields,
+            row.branches,
+            strict=True,
+        ):
+            if token == "*v" and branch.identity in affected:
+                opening_lines.update(branch.opening_lines)
+            elif token == "*^" and branch.identity in affected:
+                opening_lines.add(row.record.line_number)
+                opening_lines.update(branch.opening_lines)
+
+    barlines = [row for row in rows if row.record.kind is RecordKind.BARLINE]
+
+    def measure_start(line_number: int) -> int:
+        return next(
+            (
+                row.record.line_number
+                for row in reversed(barlines)
+                if row.record.line_number <= line_number
+            ),
+            1,
+        )
+
+    opening_starts = {measure_start(line) for line in opening_lines}
+    first_line = min(opening_starts | {problem.start_line})
+    issue_lines = {issue.line_number for issue in all_issues}
+
+    starts = [
+        row.record.line_number
+        for row in barlines
+        if first_line <= row.record.line_number < problem.end_line
+    ]
+    if first_line not in starts:
+        starts.insert(0, first_line)
+
+    slices: list[MeasureSlice] = []
+
+    for position, start_line in enumerate(starts):
+        end_line = starts[position + 1] if position + 1 < len(starts) else problem.end_line
+        start_row = rows_by_line.get(start_line)
+        match = (
+            re.match(r"^=+(\d+)", start_row.record.fields[0])
+            if start_row is not None and start_row.record.kind is RecordKind.BARLINE
+            else None
+        )
+        has_issue = any(start_line <= line < end_line for line in issue_lines)
+        must_show = start_line in opening_starts or start_line == problem.start_line or has_issue
+
+        slices.append(
+            MeasureSlice(
+                measure=match.group(1) if match is not None else None,
+                start_line=start_line,
+                end_line=end_line,
+                collapsed=not must_show,
+            )
+        )
+
+    return tuple(slices)
