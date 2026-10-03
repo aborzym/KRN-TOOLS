@@ -62,7 +62,12 @@ if manifest["commit"] != commit or manifest["sha256"] != digest:
     raise SystemExit("Pakiet nie odpowiada bieżącemu commitowi. Uruchom spine-release.")
 PY
 
-git fetch origin main --tags
+git fetch --no-tags origin main
+
+remote_tag="$(git ls-remote --tags origin "refs/tags/$tag")"
+if [[ -n "$remote_tag" ]]; then
+    git fetch --no-tags origin "refs/tags/$tag:refs/tags/$tag"
+fi
 head_commit="$(git rev-parse HEAD)"
 remote_commit="$(git rev-parse origin/main)"
 
