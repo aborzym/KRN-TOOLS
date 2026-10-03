@@ -54,6 +54,13 @@ PY
 mkdir -p dist
 log_path="$project_root/dist/build-${app_version}-${platform_name}.log"
 
+if [[ -n "$(git status --porcelain)" ]]; then
+    echo "Najpierw zapisz wszystkie zmiany w commicie."
+    exit 1
+fi
+
+build_commit="$(git rev-parse HEAD)"
+
 {
     echo "Przygotowanie SPINEWORKS $app_version — $platform_name"
 
@@ -68,6 +75,37 @@ log_path="$project_root/dist/build-${app_version}-${platform_name}.log"
 
     "$build_python" -m PyInstaller --noconfirm --clean SPINEWORKS.spec
     bash "$package_script"
+
+    "$build_python" - "$app_version" "$platform_name" "$build_commit" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+version, platform_name, build_commit = sys.argv[1:]
+extension = "dmg" if platform_name == "macos-arm64" else "deb"
+asset = Path(f"dist/SPINEWORKS-{version}-{platform_name}.{extension}")
+
+current_commit = subprocess.check_output(
+    ["git", "rev-parse", "HEAD"], text=True
+).strip()
+changes = subprocess.check_output(
+    ["git", "status", "--porcelain"], text=True
+).strip()
+
+if current_commit != build_commit or changes:
+    raise SystemExit("Źródła zmieniły się podczas budowania. Powtórz build.")
+
+manifest = {
+    "commit": build_commit,
+    "sha256": hashlib.sha256(asset.read_bytes()).hexdigest(),
+}
+Path(str(asset) + ".build.json").write_text(
+    json.dumps(manifest, indent=2) + "\n",
+    encoding="utf-8",
+)
+PY
 
     echo
     echo "Gotowe. Pakiet znajduje się w: $project_root/dist"
