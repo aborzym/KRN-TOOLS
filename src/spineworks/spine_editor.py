@@ -3,7 +3,7 @@ from pathlib import Path
 from time import perf_counter
 
 from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QCloseEvent, QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QApplication,
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QStyledItemDelegate,
@@ -364,8 +365,8 @@ class SpineEditor(QWidget):
 
         layout.addLayout(navigation)
 
-        self.save_button = QPushButton("Zatwierdź i zapisz", self)
-        self.save_button.setFixedWidth(self.button_width)
+        self.save_button = QPushButton("Zatwierdź i zapisz wszystko", self)
+        self.save_button.setFixedWidth(self.button_width * 2)
         self.save_button.setObjectName("primaryButton")
         self.save_button.setToolTip("Zatwierdź propozycje i zapisz wszystkie poprawione zakresy.")
         self.save_button.clicked.connect(self._save_changes)
@@ -1384,6 +1385,57 @@ class SpineEditor(QWidget):
             self.table.blockSignals(False)
 
         self._update_validation()
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if hasattr(self, "save_button"):
+            self.save_button.setFocus()
+
+        drafts = getattr(self, "_drafts", {})
+        if not any(draft.dirty for draft in drafts.values()):
+            event.accept()
+            return
+
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle("Niezapisane zmiany")
+        dialog.setIcon(QMessageBox.Icon.Question)
+        dialog.setText("W edytorze są niezapisane zmiany.")
+        dialog.setInformativeText(
+            "Możesz je zatwierdzić i zapisać, porzucić albo wrócić do edycji."
+        )
+
+        save = dialog.addButton(
+            "Zatwierdź i zapisz",
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        discard = dialog.addButton(
+            "Porzuć zmiany",
+            QMessageBox.ButtonRole.DestructiveRole,
+        )
+        cancel = dialog.addButton(
+            "Anuluj",
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        save.setEnabled(self.save_button.isEnabled())
+        if not save.isEnabled():
+            save.setToolTip(
+                "Przed zapisem popraw wszystkie zmienione zakresy oznaczone na czerwono."
+            )
+
+        dialog.setDefaultButton(cancel)
+        dialog.setEscapeButton(cancel)
+        dialog.exec()
+
+        clicked = dialog.clickedButton()
+        if clicked is discard:
+            event.accept()
+        elif clicked is save:
+            self._save_changes()
+            if any(draft.dirty for draft in self._drafts.values()):
+                event.ignore()
+            else:
+                event.accept()
+        else:
+            event.ignore()
 
     def _save_changes(self) -> None:
         self.save_button.setFocus()
