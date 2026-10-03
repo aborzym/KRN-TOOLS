@@ -49,7 +49,7 @@ def test_second_propagation_is_noop() -> None:
     assert document.propagate_kern_assignments() is False
 
 
-def test_adds_normalized_instrument_code_row_after_abbreviations() -> None:
+def test_adds_normalized_instrument_code_row_before_abbreviations() -> None:
     document = HumdrumDocument.from_text(
         f"{EXCLUSIVE}\n*part2\t*\t*\t*part1\t*\n"
         "*staff2\t*\t*\t*staff1\t*\n"
@@ -58,7 +58,10 @@ def test_adds_normalized_instrument_code_row_after_abbreviations() -> None:
 
     assert document.set_instrument_codes(["org", "ignored", "*", "Ivioln", "ignored"])
     assert document.instrument_codes() == ["*Iorg", "*", "*", "*Ivioln", "*"]
-    assert document.lines[document.header.instrument_abbr_line + 1] == ("*Iorg\t*\t*\t*Ivioln\t*")
+    assert document.header.instrument_code_line is not None
+    assert document.header.instrument_abbr_line is not None
+    assert document.header.instrument_code_line == document.header.instrument_abbr_line - 1
+    assert document.lines[document.header.instrument_code_line] == "*Iorg\t*\t*\t*Ivioln\t*"
 
 
 def test_updates_existing_instrument_code_row() -> None:
@@ -86,7 +89,7 @@ def test_updates_names_with_protected_prefixes() -> None:
     assert document.fields(document.header.instrument_abbr_line)[3] == "*I'Cl"
 
 
-def test_adds_instrument_group_between_class_and_code() -> None:
+def test_adds_instrument_group_before_class_and_code() -> None:
     document = HumdrumDocument.from_text(
         "**kern\t**kern\n*ICklav\t*ICvox\n*Iorgan\t*Ibass\n*-\t*-\n"
     )
@@ -94,8 +97,8 @@ def test_adds_instrument_group_between_class_and_code() -> None:
     assert document.set_instrument_groups(["cont", ""])
     assert document.instrument_groups() == ["*IGcont", "*"]
     assert document.lines[1:4] == [
-        "*ICklav\t*ICvox",
         "*IGcont\t*",
+        "*ICklav\t*ICvox",
         "*Iorgan\t*Ibass",
     ]
     assert document.remove_instrument_groups()
@@ -1109,3 +1112,50 @@ def test_reports_no_measure_numbers_for_unnumbered_barlines() -> None:
     document = HumdrumDocument.from_text("**kern\t**kern\n=\t=\n4c\t4e\n==\t==\n*-\t*-\n")
 
     assert document.has_numbered_measures() is False
+
+
+def test_sorts_header_rows_and_preserves_other_records() -> None:
+    document = HumdrumDocument.from_text(
+        "!!!OTL: Test\n"
+        "**kern\n"
+        "*I'Vln\n"
+        "*clefG2\n"
+        '*I"Violin\n'
+        "*Ivioln\n"
+        "*ICstr\n"
+        "*IGstrings\n"
+        "*staff1\n"
+        "*part1\n"
+        "*M4/4\n"
+        "=1\n"
+        "1c\n"
+        "*-\n"
+    )
+    original_count = len(document.lines)
+
+    assert document.sort_header_rows() is True
+    assert document.lines == [
+        "!!!OTL: Test",
+        "**kern",
+        "*part1",
+        "*clefG2",
+        "*staff1",
+        "*IGstrings",
+        "*ICstr",
+        "*Ivioln",
+        '*I"Violin',
+        "*I'Vln",
+        "*M4/4",
+        "=1",
+        "1c",
+        "*-",
+    ]
+    assert len(document.lines) == original_count
+    assert document.header.part_line == 2
+    assert document.header.staff_line == 4
+    assert document.header.instrument_group_line == 5
+    assert document.header.instrument_class_line == 6
+    assert document.header.instrument_code_line == 7
+    assert document.header.instrument_name_line == 8
+    assert document.header.instrument_abbr_line == 9
+    assert document.sort_header_rows() is False

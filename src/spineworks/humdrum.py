@@ -172,7 +172,8 @@ class HumdrumDocument:
             self.replace_fields(self.header.part_line, parts)
             self.replace_fields(self.header.staff_line, staffs)
 
-        return rows_created or assignments_changed
+        order_changed = self.sort_header_rows()
+        return rows_created or assignments_changed or order_changed
 
     def instrument_codes(self) -> list[str]:
         if self.header.instrument_code_line is None:
@@ -216,19 +217,12 @@ class HumdrumDocument:
             self.replace_fields(self.header.instrument_group_line, normalized)
             return True
 
-        insert_after = (
-            self.header.instrument_class_line
-            if self.header.instrument_class_line is not None
-            else self.header.instrument_abbr_line
+        self.lines.insert(
+            self.header.exclusive_line + 1,
+            "\t".join(normalized),
         )
-        if insert_after is None:
-            insert_after = self.header.exclusive_line
-        self.lines.insert(insert_after + 1, "\t".join(normalized))
-        for field_name in self.header.__dataclass_fields__:
-            current = getattr(self.header, field_name)
-            if isinstance(current, int) and current > insert_after:
-                setattr(self.header, field_name, current + 1)
-        self.header.instrument_group_line = insert_after + 1
+        self.header = self._find_header()
+        self.sort_header_rows()
         return True
 
     def remove_instrument_groups(self) -> bool:
@@ -295,16 +289,12 @@ class HumdrumDocument:
             self.replace_fields(self.header.instrument_code_line, normalized)
             return True
 
-        anchors = [
-            self.header.instrument_abbr_line,
-            self.header.instrument_name_line,
-            self.header.staff_line,
-            self.header.part_line,
-            self.header.exclusive_line,
-        ]
-        insert_after = next(line for line in anchors if line is not None)
-        self.lines.insert(insert_after + 1, "\t".join(normalized))
-        self.header.instrument_code_line = insert_after + 1
+        self.lines.insert(
+            self.header.exclusive_line + 1,
+            "\t".join(normalized),
+        )
+        self.header = self._find_header()
+        self.sort_header_rows()
         return True
 
     def system_decoration(self) -> str:
@@ -1897,6 +1887,80 @@ class HumdrumDocument:
 
         self.header = self._find_header()
         return changed_count
+
+    def sort_header_rows(self) -> bool:
+        """Uporządkuj oznaczenia instrumentów bez zmiany liczby linii."""
+        prefixes = (
+            "*part",
+            "*staff",
+            "*IG",
+            "*IC",
+            "*I",
+            '*I"',
+            "*I'",
+        )
+
+        def category(token: str) -> int | None:
+            if token.startswith("*part"):
+                return 0
+            if token.startswith("*staff"):
+                return 1
+            if token.startswith("*IG"):
+                return 2
+            if token.startswith("*IC"):
+                return 3
+            if token.startswith('*I"'):
+                return 5
+            if token.startswith("*I'"):
+                return 6
+            if token.startswith("*I") and not token.startswith("*ITr"):
+                return 4
+            return None
+
+        positions: list[int] = []
+        rows: list[tuple[int, str]] = []
+
+        for index in range(self.header.exclusive_line + 1, len(self.lines)):
+            line = self.lines[index]
+            if not line.startswith("*") or line.startswith("**"):
+                break
+
+            fields = line.split("\t")
+            if any(token in {"*^", "*v", "*x", "*+", "*-"} for token in fields):
+                break
+
+            active = [token for token in fields if token != "*"]
+            categories = {category(token) for token in active}
+
+            if not active or categories == {None}:
+                continue
+
+            if None in categories or len(categories) != 1:
+                raise HumdrumError(
+                    f"Linia {index + 1}: oznaczenia nagłówka są wymieszane "
+                    "z innymi interpretacjami. Nie można bezpiecznie "
+                    "uporządkować całych wierszy."
+                )
+
+            rank = category(active[0])
+            if rank is None:
+                continue
+
+            self._validate_width(fields, prefixes[rank])
+            positions.append(index)
+            rows.append((rank, line))
+
+        ordered = sorted(rows, key=lambda row: row[0])
+        if all(
+            self.lines[index] == text for index, (_, text) in zip(positions, ordered, strict=True)
+        ):
+            return False
+
+        for index, (_, text) in zip(positions, ordered, strict=True):
+            self.lines[index] = text
+
+        self.header = self._find_header()
+        return True
 
     def to_text(self) -> str:
         text = "\n".join(self.lines)

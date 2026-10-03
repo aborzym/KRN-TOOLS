@@ -549,11 +549,17 @@ class MainWindow(QMainWindow):
         if not self.apply_instrument_codes(show_unchanged_status=False):
             return False
         try:
-            self.current_path.write_text(self.document.to_text(), encoding="utf-8")
-        except OSError as error:
+            document = HumdrumDocument.from_text(self.document.to_text())
+            document.sort_header_rows()
+            text = document.to_text()
+            self.current_path.write_text(text, encoding="utf-8")
+        except (OSError, HumdrumError) as error:
             QMessageBox.critical(self, "Nie można zapisać pliku", str(error))
             return False
-        self.saved_text = self.document.to_text()
+
+        self.document = document
+        self.saved_text = text
+        self._refresh_table()
         self._update_window_title()
         self.statusBar().showMessage(f"Zapisano {self.current_path.name}")
         return True
@@ -577,14 +583,19 @@ class MainWindow(QMainWindow):
         if path.suffix.lower() != ".krn":
             path = path.with_name(path.name + ".krn")
         try:
-            path.write_text(self.document.to_text(), encoding="utf-8")
-        except OSError as error:
+            document = HumdrumDocument.from_text(self.document.to_text())
+            document.sort_header_rows()
+            text = document.to_text()
+            path.write_text(text, encoding="utf-8")
+        except (OSError, HumdrumError) as error:
             QMessageBox.critical(self, "Nie można zapisać pliku", str(error))
             return False
 
+        self.document = document
         self.current_path = path
-        self.saved_text = self.document.to_text()
+        self.saved_text = text
         self.file_label.setText(path.name)
+        self._refresh_table()
         self._update_window_title()
         self.statusBar().showMessage(f"Zapisano jako {path.name}")
         return True
@@ -1659,7 +1670,9 @@ class MainWindow(QMainWindow):
                 return
         before = self.document.to_text()
         try:
-            self.document = run_addic(self.document)
+            document = run_addic(self.document)
+            document.sort_header_rows()
+            self.document = document
         except HumdrumError as error:
             self._show_filter_error("Nie można uruchomić addic", error)
             return

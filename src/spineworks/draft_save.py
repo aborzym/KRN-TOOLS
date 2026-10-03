@@ -83,7 +83,10 @@ def prepare_save_text(
 
         selected.append(draft)
 
-    return compose_drafts(document, tuple(selected))
+    text = compose_drafts(document, tuple(selected))
+    result_document = HumdrumDocument.from_text(text)
+    result_document.sort_header_rows()
+    return result_document.to_text()
 
 
 def write_verified_text(
