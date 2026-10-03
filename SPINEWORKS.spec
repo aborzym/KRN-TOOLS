@@ -1,14 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import runpy
 import sys
-import tomllib
 from pathlib import Path
-
 
 project_root = Path(SPECPATH).resolve()
 
-with (project_root / "pyproject.toml").open("rb") as pyproject_file:
-    app_version = tomllib.load(pyproject_file)["project"]["version"]
+app_version = runpy.run_path(
+    str(project_root / "src/spineworks/__init__.py")
+)["__version__"]
 
 icon = project_root / (
     "packaging/spineworks.icns"

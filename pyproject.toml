@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spineworks"
-version = "2.3.0"
+dynamic = ["version"]
 description = "Desktop tools for inspecting and repairing Humdrum files"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,6 +15,9 @@ dev = ["pytest>=8", "ruff>=0.6"]
 
 [project.scripts]
 spineworks = "spineworks.app:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "spineworks.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

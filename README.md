@@ -102,12 +102,23 @@ Na Linuksie wystarczy:
 pyinstaller --noconfirm --clean SPINEWORKS.spec
 ```
 
+Następnie zbuduj pakiet DEB:
+
+```bash
+bash packaging/build-linux-deb.sh
+```
+
+Numer wersji jest definiowany w `src/spineworks/__init__.py`.
+Konfiguracja pakietu Python, PyInstaller oraz skrypt budowania DEB
+pobierają go z tego samego miejsca.
+
 ## Pakiety instalacyjne
 
-Wydanie 2.3.0 jest przygotowywane dla następujących platform:
+Pakiety wydania 2.4.0:
 
-- Linux `x86_64` — `SPINEWORKS-2.3.0-linux-x86_64.deb`;
-- macOS Apple Silicon `arm64` — `SPINEWORKS-2.3.0-macos-arm64.dmg`.
+- Linux `x86_64` — `SPINEWORKS-2.4.0-linux-x86_64.deb`;
+- macOS Apple Silicon `arm64` — `SPINEWORKS-2.4.0-macos-arm64.dmg`
+  (budowany osobno na macOS).
 
 Wersja dla macOS Intel `x86_64` zostanie dodana oddzielnie.
 
