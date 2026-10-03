@@ -366,7 +366,9 @@ class SpineEditor(QWidget):
         layout.addLayout(navigation)
 
         self.save_button = QPushButton("Zatwierdź i zapisz wszystko", self)
-        self.save_button.setFixedWidth(self.button_width * 2)
+        self.save_button.setFixedWidth(
+            self.previous_button.width() + navigation.spacing() + self.next_button.width()
+        )
         self.save_button.setObjectName("primaryButton")
         self.save_button.setToolTip("Zatwierdź propozycje i zapisz wszystkie poprawione zakresy.")
         self.save_button.clicked.connect(self._save_changes)
