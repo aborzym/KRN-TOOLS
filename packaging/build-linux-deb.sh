@@ -59,7 +59,7 @@ cat > "$package_root/usr/share/applications/spineworks.desktop" <<'EOF'
 Name=SPINEWORKS
 Comment=Graficzny edytor plików Humdrum
 Exec=spineworks %F
-Icon=spineworks
+Icon=/usr/share/icons/hicolor/1024x1024/apps/spineworks.png
 Terminal=false
 Type=Application
 Categories=AudioVideo;Audio;
