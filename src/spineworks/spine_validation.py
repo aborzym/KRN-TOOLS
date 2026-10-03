@@ -1101,6 +1101,49 @@ class FragmentDraft:
             if after != before:
                 self._undo.append(before)
 
+    def reorder_final_clefs(
+        self,
+        start_line: int,
+        end_line: int,
+    ) -> bool:
+        rendered = self.rendered_lines()
+        current_start = self.rendered_index(start_line) + 1
+        current_end = self.rendered_index(end_line) + 1
+
+        candidate = HumdrumDocument(
+            [line.text for line in rendered[:current_end]],
+            False,
+        )
+        trace = trace_spines(candidate)
+        replacements = prepare_clef_reordering(
+            candidate,
+            start_line=current_start,
+            end_line=current_end,
+            trace=trace,
+        )
+        if not replacements:
+            return False
+
+        rows = {row.record.line_number: row for row in trace.records}
+
+        for number, replacement in replacements:
+            if replacement:
+                continue
+
+            row = rows[number]
+            for token, branch in zip(
+                row.record.fields,
+                row.branches,
+                strict=True,
+            ):
+                if (
+                    token.startswith("*clef")
+                    and branch.identity.root_column not in self._editable_roots
+                ):
+                    raise ValueError("Klucz należy do instrumentu tylko do odczytu.")
+
+        return self._apply_candidate_replacements(replacements)
+
     def join_reopenings(
         self,
         source_line: int,
@@ -2804,3 +2847,110 @@ def prepare_preserved_closing_block(
             return result
 
     raise HumdrumError("Nie można dodać scalenia bez zmiany istniejących zamknięć.")
+
+
+def prepare_clef_reordering(
+    document: HumdrumDocument,
+    start_line: int,
+    end_line: int,
+    *,
+    trace: SpineTrace | None = None,
+) -> tuple[tuple[int, tuple[DraftLine, ...]], ...]:
+    """Przenieś końcowe zmiany kluczy przed blok scaleń."""
+    if trace is None:
+        trace = trace_spines(document)
+    if trace.issue is not None:
+        raise HumdrumError(trace.issue.message)
+
+    rows = [row for row in trace.records if start_line <= row.record.line_number < end_line]
+    last_data = max(
+        (row.record.line_number for row in rows if row.record.kind is RecordKind.DATA),
+        default=start_line - 1,
+    )
+    closing = next(
+        (
+            row
+            for row in rows
+            if row.record.line_number > last_data
+            and row.record.kind is RecordKind.INTERPRETATION
+            and "*v" in row.record.fields
+        ),
+        None,
+    )
+    if closing is None:
+        return ()
+
+    following = [row for row in rows if row.record.line_number > closing.record.line_number]
+    clef_rows: list[TracedRecord] = []
+
+    for row in following:
+        record = row.record
+        if record.kind in {RecordKind.GLOBAL, RecordKind.LOCAL_COMMENT, RecordKind.EMPTY}:
+            continue
+        if record.kind is not RecordKind.INTERPRETATION:
+            return ()
+
+        if all(token in {"*", "*v"} for token in record.fields):
+            continue
+
+        if all(token == "*" or token.startswith("*clef") for token in record.fields):
+            clef_rows.append(row)
+        else:
+            raise HumdrumError(
+                f"Linia {record.line_number}: poza kluczami występują "
+                "inne interpretacje — ten przypadek wymaga osobnej naprawy."
+            )
+
+    if not clef_rows:
+        return ()
+
+    moved: list[DraftLine] = []
+
+    for row in clef_rows:
+        fields = ["*"] * len(closing.branches)
+
+        for token, branch in zip(
+            row.record.fields,
+            row.branches,
+            strict=True,
+        ):
+            if token == "*":
+                continue
+
+            destinations = [
+                column
+                for column, earlier in enumerate(closing.branches)
+                if earlier.identity == branch.identity
+                and earlier.path[: len(branch.path)] == branch.path
+            ]
+            if not destinations:
+                raise HumdrumError(
+                    f"Linia {row.record.line_number}: "
+                    "nie można przypisać klucza do wcześniejszych warstw."
+                )
+
+            for column in destinations:
+                if fields[column] not in {"*", token}:
+                    raise HumdrumError("Sprzeczne klucze w jednej warstwie.")
+                fields[column] = token
+
+        moved.append(
+            DraftLine(
+                source_line=None,
+                text="\t".join(fields),
+                description=f"klucz z linii {row.record.line_number}",
+                anchor_line=closing.record.line_number,
+            )
+        )
+
+    moved.append(
+        DraftLine(
+            source_line=closing.record.line_number,
+            text=closing.record.text,
+        )
+    )
+    replacements = {
+        closing.record.line_number: tuple(moved),
+        **{row.record.line_number: () for row in clef_rows},
+    }
+    return tuple(sorted(replacements.items()))

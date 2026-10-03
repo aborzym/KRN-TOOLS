@@ -1258,11 +1258,17 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                     if self.draft.to_text() == before:
                         raise ValueError("Operacja nie zmieniła zakresu — wymagana ręczna edycja.")
 
+                self.draft.reorder_final_clefs(
+                    self.problem.start_line,
+                    self.problem.end_line,
+                )
+
                 result = validate_draft(
                     self.draft,
                     start_line=self.problem.start_line,
                     end_line=self.problem.end_line,
                 )
+
                 if result.state is ValidationState.ERROR:
                     raise ValueError(
                         "Nie udało się poprawić całego zakresu. "
@@ -1808,6 +1814,12 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 self.join_button.isEnabled()
                 or self.move_split_button.isEnabled()
                 or self.move_merge_button.isEnabled()
+                or (
+                    result.state is ValidationState.ERROR
+                    and any(
+                        issue.code == "interpretation_after_merge" for issue in self.problem.issues
+                    )
+                )
             )
         )
         self.previous_button.setEnabled(self._problem_index > 0)

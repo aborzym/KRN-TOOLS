@@ -37,6 +37,12 @@ def remap_spine_remaining(
     if any(value < 0 for value in remaining):
         raise HumdrumError("Pozostała długość nie może być ujemna.")
 
+    if before == after:
+        return tuple(
+            value if branch.identity.spine_type == "**kern" else Fraction(0)
+            for branch, value in zip(after, remaining, strict=True)
+        )
+
     def is_ancestor(
         ancestor: SpineBranch,
         descendant: SpineBranch,

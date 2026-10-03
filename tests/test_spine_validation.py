@@ -21,6 +21,7 @@ from spineworks.spine_validation import (
     plan_merge_move,
     plan_merge_reopening,
     plan_split_move,
+    prepare_clef_reordering,
     prepare_closing_block,
     prepare_merge_extension,
     prepare_merge_move,
@@ -2847,3 +2848,43 @@ def test_hidden_rest_proposals_detect_changed_field() -> None:
     assert draft.to_text() == before
     assert draft.pending_suggestions == ()
     assert draft.token(5, 1) == "4ryy"
+
+
+def test_moves_final_clef_before_merges_and_preserves_closing_rows() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**dynam\t**kern\n"
+        "=619\t=619\t=619\n"
+        "*^\t*\t*^\n"
+        "1c\t1e\tp\t1g\t1b\n"
+        "*v\t*v\t*\t*\t*\n"
+        "*\t*\t*v\t*v\n"
+        "*\t*\t*clefC4\n"
+        "=620\t=620\t=620\n"
+        "*-\t*-\t*-\n"
+    )
+    original = document.to_text()
+
+    replacements = dict(prepare_clef_reordering(document, start_line=2, end_line=8))
+
+    assert replacements[7] == ()
+    assert len(replacements[5]) == 2
+    assert replacements[5][0].text == "*\t*\t*\t*clefC4\t*clefC4"
+    assert replacements[5][0].source_line is None
+    assert replacements[5][0].anchor_line == 5
+    assert replacements[5][1].text == document.lines[4]
+    assert replacements[5][1].source_line == 5
+    assert 6 not in replacements
+    assert document.to_text() == original
+
+    lines: list[str] = []
+    for number, text in enumerate(document.lines, start=1):
+        if number in replacements:
+            lines.extend(line.text for line in replacements[number])
+        else:
+            lines.append(text)
+
+    candidate = HumdrumDocument(lines, document.trailing_newline)
+    trace = trace_spines(candidate)
+
+    assert trace.issue is None
+    assert find_split_issues(trace) == ()
