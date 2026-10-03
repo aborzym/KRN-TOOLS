@@ -886,7 +886,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 )
                 self.table.setColumnWidth(column, required_width)
 
-    def _reopening_target(self) -> tuple[int, int] | None:
+    def _target_structure(self):
         rendered = self.draft.rendered_lines()
         positions = [
             index
@@ -901,19 +901,26 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 and self.problem.start_line <= reference <= self.problem.end_line
             )
         ]
-        if not positions:
-            return None
+        prefix = rendered[: max(positions) + 1] if positions else ()
 
-        rendered = rendered[: max(positions) + 1]
-        records = read_records("\n".join(line.text for line in rendered))
+        cached = getattr(self, "_target_structure_cache", None)
+        if cached is not None and cached[0] == prefix:
+            return prefix, cached[1]
+
+        records = read_records("\n".join(line.text for line in prefix))
         tracing_lines = [
             "\t".join(token or "." for token in record.fields)
             if record.kind is RecordKind.DATA
             else record.text
             for record in records
         ]
-        trace = trace_spines(HumdrumDocument(tracing_lines, False))
-        if trace.issue is not None:
+        trace = trace_spines(HumdrumDocument(tracing_lines, False)) if prefix else None
+        self._target_structure_cache = (prefix, trace)
+        return prefix, trace
+
+    def _reopening_target(self) -> tuple[int, int] | None:
+        rendered, trace = self._target_structure()
+        if trace is None or trace.issue is not None:
             return None
 
         editable_roots = {identity.root_column for identity in self.problem.editable_identities}
@@ -936,6 +943,8 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 )
                 if token == "*v" and branch.identity.root_column in editable_roots
             }
+            if not roots:
+                continue
 
             for following in trace.records[index + 1 :]:
                 if following.record.kind is RecordKind.BARLINE:
@@ -948,13 +957,16 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                     following.branches,
                     strict=True,
                 ):
-                    if token == "*^" and branch.identity.root_column in roots:
-                        return source_line, branch.identity.root_column
+                    root = branch.identity.root_column
+                    if token == "*^" and root in roots:
+                        return source_line, root
 
         return None
 
     def _split_target(self) -> tuple[int, int] | None:
-        rendered = self.draft.rendered_lines()
+        rendered, trace = self._target_structure()
+        if trace is None:
+            return None
 
         for issue in self.problem.issues:
             if issue.code != "late_split":
@@ -969,27 +981,18 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 continue
 
             index = indices[0]
-            fields = rendered[index].text.split("\t")
-            if "*^" not in fields:
+            if trace.issue is not None and trace.issue.line_number <= index + 1:
+                continue
+            if index >= len(trace.records):
                 continue
 
-            tracing_lines: list[str] = []
-            for line in rendered[: index + 1]:
-                records = read_records(line.text)
-                if records and records[0].kind is RecordKind.DATA:
-                    tracing_lines.append("\t".join(token or "." for token in records[0].fields))
-                else:
-                    tracing_lines.append(line.text)
-
-            trace = trace_spines(HumdrumDocument(tracing_lines, False))
-            if trace.issue is not None:
+            selected = trace.records[index]
+            if selected.record.kind is not RecordKind.INTERPRETATION:
                 continue
 
-            selected = trace.records[-1]
             roots = {identity.root_column for identity in issue.identities}
-
             for token, branch in zip(
-                fields,
+                selected.record.fields,
                 selected.branches,
                 strict=True,
             ):
@@ -1000,6 +1003,43 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
         return None
 
     def _merge_target(self) -> tuple[int, int] | None:
+        rendered, trace = self._target_structure()
+        if trace is None:
+            return None
+
+        for issue in self.problem.issues:
+            if issue.code != "early_merge":
+                continue
+
+            indices = [
+                index
+                for index, line in enumerate(rendered)
+                if line.source_line == issue.line_number
+            ]
+            if len(indices) != 1:
+                continue
+
+            index = indices[0]
+            if trace.issue is not None and trace.issue.line_number <= index + 1:
+                continue
+            if index >= len(trace.records):
+                continue
+
+            selected = trace.records[index]
+            if selected.record.kind is not RecordKind.INTERPRETATION:
+                continue
+
+            roots = {identity.root_column for identity in issue.identities}
+            for token, branch in zip(
+                selected.record.fields,
+                selected.branches,
+                strict=True,
+            ):
+                root = branch.identity.root_column
+                if token == "*v" and root in roots:
+                    return issue.line_number, root
+
+        return None
         rendered = self.draft.rendered_lines()
 
         for issue in self.problem.issues:
@@ -1132,10 +1172,16 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             tokens.append((original_line, suggestion.source_column, suggestion.token))
 
         with self.draft.group_changes():
+            structure_start = perf_counter()
             proposal = apply(*target)
+            print(
+                f"Zmiana struktury {operation}: {perf_counter() - structure_start:.3f} s",
+                flush=True,
+            )
             if proposal is None:
                 return False
 
+            fill_start = perf_counter()
             if operation == "join" and identity.spine_type == "**kern":
                 joined_lines = self.draft.rendered_lines()
                 replacements: list[tuple[int, int, str, str]] = []
@@ -1146,6 +1192,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                     replacements.append((number, column, expected, token))
 
                 self.draft.propose_hidden_rest_tokens(tuple(replacements))
+
             elif operation == "join":
                 self.draft.propose_tokens(
                     tuple((number, column, ".") for number, column in proposal.proposed_cells)
@@ -1153,9 +1200,15 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             else:
                 self.draft.propose_tokens(tuple(tokens))
 
+            print(
+                f"Wpisanie propozycji {operation}: {perf_counter() - fill_start:.3f} s",
+                flush=True,
+            )
+
         return True
 
     def _repair_range(self) -> None:
+        repair_start = perf_counter()
         self.repair_button.setFocus()
         if not self._editing:
             return
@@ -1167,7 +1220,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 while True:
                     operation = ""
                     target = None
-
+                    search_start = perf_counter()
                     for name, find_target in (
                         ("join", self._reopening_target),
                         ("split", self._split_target),
@@ -1177,7 +1230,10 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                         if target is not None:
                             operation = name
                             break
-
+                    print(
+                        f"Wyszukiwanie operacji: {perf_counter() - search_start:.3f} s",
+                        flush=True,
+                    )
                     if target is None:
                         break
 
@@ -1188,7 +1244,13 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                         )
                     seen_states.add(before)
 
-                    if not self._apply_repair_operation(operation, target):
+                    operation_start = perf_counter()
+                    applied = self._apply_repair_operation(operation, target)
+                    print(
+                        f"Operacja {operation}: {perf_counter() - operation_start:.3f} s",
+                        flush=True,
+                    )
+                    if not applied:
                         raise ValueError(
                             "Naprawa została przerwana. Zmiany z tego kliknięcia zostały wycofane."
                         )
@@ -1212,9 +1274,13 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             self.report.setPlainText(str(error))
             return
 
-        self._refresh_after_repair()
+        self._refresh_after_repair(result)
+        print(
+            f"Cała naprawa zakresu: {perf_counter() - repair_start:.3f} s",
+            flush=True,
+        )
 
-    def _refresh_after_repair(self) -> None:
+    def _refresh_after_repair(self, validation_result=None) -> None:
         vertical = self.table.verticalScrollBar().value()
         horizontal = self.table.horizontalScrollBar().value()
 
@@ -1233,7 +1299,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
         )
 
         timing_start = perf_counter()
-        self._update_validation()
+        self._update_validation(validation_result)
         print(
             f"Kontrola zakresu: {perf_counter() - timing_start:.3f} s",
             flush=True,
@@ -1703,12 +1769,13 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 "Zapisano wszystkie zmiany. Nie wykryto kolejnych problemów rozdwojenia spinów."
             )
 
-    def _update_validation(self) -> None:
-        result = validate_draft(
-            self.draft if self._editing else self.original_draft,
-            start_line=self.problem.start_line,
-            end_line=self.problem.end_line,
-        )
+    def _update_validation(self, result=None) -> None:
+        if result is None:
+            result = validate_draft(
+                self.draft if self._editing else self.original_draft,
+                start_line=self.problem.start_line,
+                end_line=self.problem.end_line,
+            )
         self.status_indicator.set_state(result.state)
         if self._editing:
             self._range_states[self._problem_index] = result.state

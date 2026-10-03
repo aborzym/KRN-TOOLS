@@ -841,6 +841,14 @@ class FragmentDraft:
         def traced_rows(
             lines: tuple[DraftLine, ...],
         ) -> dict[int, TracedRecord]:
+            pending_lines = {source_line for source_line, _ in self._pending_suggestions}
+            positions = [
+                index for index, line in enumerate(lines) if line.source_line in pending_lines
+            ]
+            if not positions:
+                return {}
+
+            lines = lines[: max(positions) + 1]
             texts: list[str] = []
             for line in lines:
                 record = read_records(line.text)[0]
@@ -1029,7 +1037,18 @@ class FragmentDraft:
 
         rendered = self.rendered_lines()
         current_line = self.rendered_index(source_line) + 1
-        candidate = HumdrumDocument.from_text(self.to_text())
+        analysis_end = next(
+            (
+                index + 1
+                for index in range(current_line, len(rendered))
+                if rendered[index].text.startswith("=")
+            ),
+            len(rendered),
+        )
+        candidate = HumdrumDocument(
+            [line.text for line in rendered[:analysis_end]],
+            False,
+        )
         proposal = prepare_merge_move(
             candidate,
             current_line,
@@ -1094,7 +1113,18 @@ class FragmentDraft:
 
         rendered = self.rendered_lines()
         current_line = self.rendered_index(source_line) + 1
-        candidate = HumdrumDocument.from_text(self.to_text())
+        analysis_end = next(
+            (
+                index + 1
+                for index in range(current_line, len(rendered))
+                if rendered[index].text.startswith("=")
+            ),
+            len(rendered),
+        )
+        candidate = HumdrumDocument(
+            [line.text for line in rendered[:analysis_end]],
+            False,
+        )
         proposal = prepare_merge_reopenings(
             candidate,
             current_line,
@@ -1128,7 +1158,18 @@ class FragmentDraft:
 
         rendered = self.rendered_lines()
         current_line = self.rendered_index(source_line) + 1
-        candidate = HumdrumDocument.from_text(self.to_text())
+        analysis_end = next(
+            (
+                index + 1
+                for index in range(current_line, len(rendered))
+                if rendered[index].text.startswith("=")
+            ),
+            len(rendered),
+        )
+        candidate = HumdrumDocument(
+            [line.text for line in rendered[:analysis_end]],
+            False,
+        )
         proposal = prepare_split_move(
             candidate,
             current_line,
@@ -1175,22 +1216,34 @@ class FragmentDraft:
         if not 0 <= column < len(fields):
             raise ValueError("Kolumna szkicu nie istnieje.")
 
-        # Empty data cells are temporarily represented by dots solely
-        # to trace column identities. The actual draft remains unchanged.
+        current_line = row_index + 1
+        analysis_end = next(
+            (
+                index + 1
+                for index in range(current_line, len(rendered))
+                if rendered[index].text.startswith("=")
+            ),
+            len(rendered),
+        )
+
+        # Dane nie zmieniają tożsamości gałęzi.
+        # Kropki służą tylko odczytowi struktury, nie zmieniają szkicu.
         tracing_lines: list[str] = []
-        for current in rendered:
+        for current in rendered[:analysis_end]:
             current_record = read_records(current.text)[0]
             if current_record.kind is RecordKind.DATA:
-                tracing_lines.append("\t".join(value or "." for value in current_record.fields))
+                tracing_lines.append("\t".join("." for _ in current_record.fields))
             else:
                 tracing_lines.append(current.text)
 
-        tracing_document = HumdrumDocument(
-            tracing_lines,
-            self._trailing_newline,
-        )
-        trace = trace_spines(tracing_document)
-        current_line = row_index + 1
+        structure_key = tuple(tracing_lines)
+        cached = getattr(self, "_token_structure_cache", None)
+
+        if cached is not None and cached[0] == structure_key:
+            trace = cached[1]
+        else:
+            trace = trace_spines(HumdrumDocument(tracing_lines, False))
+            self._token_structure_cache = (structure_key, trace)
 
         if trace.issue is not None and trace.issue.line_number <= current_line:
             raise HumdrumError(
@@ -1374,19 +1427,37 @@ class FragmentDraft:
         return True
 
     def rendered_lines(self) -> tuple[DraftLine, ...]:
+        source_rows = getattr(self, "_source_rows_cache", None)
+        if source_rows is None:
+            source_rows = tuple(
+                DraftLine(
+                    source_line=source_line,
+                    text=text,
+                )
+                for source_line, text in enumerate(self._source_lines, start=1)
+            )
+            self._source_rows_cache = source_rows
+
+        changes_by_line: dict[int, dict[int, str]] = {}
+        for (source_line, column), token in self._changes.items():
+            changes_by_line.setdefault(source_line, {})[column] = token
+
         result: list[DraftLine] = []
 
-        for source_line, text in enumerate(self._source_lines, start=1):
+        for source_line, original in enumerate(source_rows, start=1):
             replacement = self._replacements.get(source_line)
             if replacement is not None:
                 result.extend(replacement)
                 continue
 
-            fields = text.split("\t")
-            for column in range(len(fields)):
-                key = (source_line, column)
-                if key in self._changes:
-                    fields[column] = self._changes[key]
+            changes = changes_by_line.get(source_line)
+            if not changes:
+                result.append(original)
+                continue
+
+            fields = original.text.split("\t")
+            for column, token in changes.items():
+                fields[column] = token
 
             result.append(
                 DraftLine(
