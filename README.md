@@ -118,7 +118,6 @@ Pakiety wydania 2.4.0:
 
 - Linux `x86_64` — `SPINEWORKS-2.4.0-linux-x86_64.deb`;
 - macOS Apple Silicon `arm64` — `SPINEWORKS-2.4.0-macos-arm64.dmg`
-  (budowany osobno na macOS).
 
 Wersja dla macOS Intel `x86_64` zostanie dodana oddzielnie.
 

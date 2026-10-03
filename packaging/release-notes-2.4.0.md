@@ -23,8 +23,8 @@
 
 ## Dostępność
 
-Pakiet Linux x86_64 jest dostępny w tym wydaniu.
-Pakiet macOS Apple Silicon zostanie dodany po zbudowaniu i sprawdzeniu na macOS.
+Dostępne pakiety: Linux x86_64 oraz macOS Apple Silicon arm64.
+Aktualizacja z wersji 2.3.0 została sprawdzona na obu platformach.
 
 ## Sprawdzenie
 
