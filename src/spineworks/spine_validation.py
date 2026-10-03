@@ -1397,6 +1397,45 @@ class FragmentDraft:
 
         return tuple(result)
 
+    def source_replacements(
+        self,
+    ) -> tuple[tuple[int, tuple[DraftLine, ...]], ...]:
+        """Zwróć zmiany przypisane do wierszy oryginalnego pliku."""
+        replacements = self._replacements.copy()
+        changed_lines = {line for line, _ in self._changes}
+
+        for source_line in sorted(changed_lines):
+            if source_line in replacements:
+                raise ValueError(
+                    f"Linia {source_line}: nakładają się edycja tokenów i zastąpienie wiersza."
+                )
+
+            fields = self._source_lines[source_line - 1].split("\t")
+            for column in range(len(fields)):
+                key = (source_line, column)
+                if key in self._changes:
+                    fields[column] = self._changes[key]
+
+            replacements[source_line] = (
+                DraftLine(
+                    source_line=source_line,
+                    text="\t".join(fields),
+                ),
+            )
+
+        result: list[tuple[int, tuple[DraftLine, ...]]] = []
+        for source_line, replacement in sorted(replacements.items()):
+            baseline = (
+                DraftLine(
+                    source_line=source_line,
+                    text=self._source_lines[source_line - 1],
+                ),
+            )
+            if replacement != baseline:
+                result.append((source_line, replacement))
+
+        return tuple(result)
+
     def to_text(self) -> str:
         text = "\n".join(line.text for line in self.rendered_lines())
         return text + ("\n" if self._trailing_newline else "")

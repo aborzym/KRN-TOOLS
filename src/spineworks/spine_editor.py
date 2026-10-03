@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from spineworks.draft_save import prepare_save_text, write_verified_text
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.meter_rhythm import meter_rest_options
 from spineworks.spine_rhythm import (
@@ -206,8 +207,11 @@ class SpineEditor(QWidget):
         self,
         document: HumdrumDocument,
         parent: QWidget | None = None,
+        *,
+        file_path: Path | None = None,
     ) -> None:
         super().__init__(parent)
+        self._file_path = file_path.expanduser().resolve() if file_path is not None else None
         self.setStyleSheet(SPINEWORKS_STYLE)
         self.setWindowTitle("SPINEWORKS — kontrola rozdwojeń")
         self.resize(1100, 720)
@@ -278,6 +282,7 @@ class SpineEditor(QWidget):
         self._problems = problems
         self._problem_index = 0
         self._drafts: dict[int, FragmentDraft] = {}
+        self._range_states: dict[int, ValidationState] = {}
 
         self.problem = problems[0]
         view = build_measure_view(trace, self.problem, issues)
@@ -358,6 +363,17 @@ class SpineEditor(QWidget):
         navigation.addWidget(self.next_button)
 
         layout.addLayout(navigation)
+
+        self.save_button = QPushButton("Zatwierdź i zapisz", self)
+        self.save_button.setFixedWidth(self.button_width)
+        self.save_button.setObjectName("primaryButton")
+        self.save_button.setToolTip("Zatwierdź propozycje i zapisz wszystkie poprawione zakresy.")
+        self.save_button.clicked.connect(self._save_changes)
+
+        save_row = QHBoxLayout()
+        save_row.addStretch()
+        save_row.addWidget(self.save_button)
+        layout.addLayout(save_row)
 
         self.title_label.setText(f"Takt {self.problem.measure} · zakres 1 z {len(problems)}")
         self._show_rows()
@@ -1369,6 +1385,87 @@ class SpineEditor(QWidget):
 
         self._update_validation()
 
+    def _save_changes(self) -> None:
+        self.save_button.setFocus()
+        if self._file_path is None:
+            self.report.setPlainText("Nie podano ścieżki pliku do zapisu.")
+            return
+
+        ranges = tuple(
+            (
+                draft,
+                self._problems[index].start_line,
+                self._problems[index].end_line,
+            )
+            for index, draft in sorted(self._drafts.items())
+            if draft.dirty
+        )
+        if not ranges:
+            return
+
+        try:
+            text = prepare_save_text(self._source_document, ranges)
+            document = HumdrumDocument.from_text(text)
+            trace = trace_spines(document)
+            if trace.issue is not None:
+                raise HumdrumError(trace.issue.message)
+
+            issues = find_split_issues(trace)
+            problems = group_split_issues(trace, issues)
+
+            write_verified_text(
+                self._file_path,
+                expected_text=self._source_document.to_text(),
+                new_text=text,
+            )
+        except (OSError, UnicodeError, ValueError, HumdrumError) as error:
+            self.report.setPlainText(str(error))
+            return
+
+        self._source_document = document
+        self._source_trace = trace
+        self._source_issues = issues
+        self._problems = problems
+        self._drafts.clear()
+        self._range_states.clear()
+
+        if problems:
+            self._load_problem(0)
+            self.report.appendPlainText(
+                "\nZapisano wszystkie poprawione zakresy. "
+                "Numery linii odpowiadają teraz zapisanemu plikowi."
+            )
+        else:
+            self._editing = False
+            self.table.blockSignals(True)
+            try:
+                self.table.clearSpans()
+                self.table.clear()
+                self.table.setRowCount(0)
+            finally:
+                self.table.blockSignals(False)
+
+            self.table.setEnabled(False)
+            for button in (
+                self.view_button,
+                self.undo_button,
+                self.repair_button,
+                self.approve_button,
+                self.join_button,
+                self.move_split_button,
+                self.move_merge_button,
+                self.previous_button,
+                self.next_button,
+                self.save_button,
+            ):
+                button.setEnabled(False)
+
+            self.status_indicator.set_state(ValidationState.VALID)
+            self.title_label.setText("Wszystkie rozdwojenia poprawione.")
+            self.report.setPlainText(
+                "Zapisano wszystkie zmiany. Nie wykryto kolejnych problemów rozdwojenia spinów."
+            )
+
     def _update_validation(self) -> None:
         result = validate_draft(
             self.draft if self._editing else self.original_draft,
@@ -1376,6 +1473,20 @@ class SpineEditor(QWidget):
             end_line=self.problem.end_line,
         )
         self.status_indicator.set_state(result.state)
+        if self._editing:
+            self._range_states[self._problem_index] = result.state
+
+        changed_indices = [index for index, draft in self._drafts.items() if draft.dirty]
+        self.save_button.setEnabled(
+            self._file_path is not None
+            and bool(changed_indices)
+            and all(
+                self._range_states.get(index, ValidationState.ERROR)
+                in {ValidationState.PENDING, ValidationState.VALID}
+                for index in changed_indices
+            )
+        )
+
         self.view_button.setEnabled(self.draft.dirty or not self._editing)
         self.move_merge_button.setVisible(True)
         self.move_merge_button.setEnabled(self._editing and self._merge_target() is not None)
@@ -1416,7 +1527,7 @@ def main() -> int:
     try:
         path = Path(sys.argv[1]).expanduser()
         document = HumdrumDocument.from_text(path.read_text(encoding="utf-8"))
-        editor = SpineEditor(document)
+        editor = SpineEditor(document, file_path=path)
     except (OSError, UnicodeError, HumdrumError) as error:
         print(f"Nie można otworzyć edytora: {error}")
         return 1
