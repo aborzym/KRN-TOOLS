@@ -101,3 +101,50 @@ else
 fi
 
 gh release view "$tag" --repo "$repository" --json url,assets
+
+
+"$build_python" - "$repository" "$tag" "$asset" "$manifest" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+repository, tag, asset_path, manifest_path = sys.argv[1:]
+asset = Path(asset_path)
+manifest = Path(manifest_path)
+
+release = json.loads(
+    subprocess.check_output(
+        ["gh", "api", f"repos/{repository}/releases/tags/{tag}"],
+        text=True,
+    )
+)
+
+if release.get("draft"):
+    raise SystemExit("Wydanie jest szkicem — lokalny pakiet zostaje.")
+
+remote = next(
+    (
+        item
+        for item in release.get("assets", [])
+        if item.get("name") == asset.name
+    ),
+    None,
+)
+digest = "sha256:" + hashlib.sha256(asset.read_bytes()).hexdigest()
+
+if (
+    remote is None
+    or remote.get("state") != "uploaded"
+    or remote.get("size") != asset.stat().st_size
+    or remote.get("digest") != digest
+):
+    raise SystemExit(
+        "Nie potwierdzono zgodności pakietu na GitHub — lokalne pliki zostają."
+    )
+
+asset.unlink()
+manifest.unlink()
+print(f"Publikacja zweryfikowana. Usunięto lokalny instalator: {asset.name}")
+PY
