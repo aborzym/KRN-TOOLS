@@ -229,6 +229,34 @@ class SpineEditor(QDialog):
         title_row.addStretch(1)
         self.status_indicator = StatusIndicator(self)
         title_row.addWidget(self.status_indicator)
+
+        self.help_button = QPushButton("?", self)
+        self.help_button.setObjectName("helpButton")
+        self.help_button.setFixedSize(30, 30)
+        self.help_button.setToolTip("Pomoc — edytor rozdwojeń")
+        self.help_button.setAccessibleName("Pomoc — edytor rozdwojeń")
+        self.help_button.clicked.connect(self._show_help)
+        self.help_button.setStyleSheet(
+            """
+            QPushButton#helpButton {
+                background: #1c2a20;
+                color: #d9eee0;
+                border: 1px solid #45634e;
+                border-radius: 15px;
+                font-size: 17px;
+                font-weight: 600;
+                padding: 0;
+            }
+            QPushButton#helpButton:hover {
+                background: #294333;
+                border-color: #63d297;
+            }
+            QPushButton#helpButton:pressed {
+                background: #183d29;
+            }
+            """
+        )
+        title_row.addWidget(self.help_button)
         layout.addLayout(title_row)
 
         self.table = QTableWidget(self)
@@ -388,6 +416,160 @@ class SpineEditor(QDialog):
         )
         self.table.itemChanged.connect(self._edit_item)
         self._update_validation()
+
+    def _show_help(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("SPINEWORKS — pomoc do edytora rozdwojeń")
+        dialog.setStyleSheet(SPINEWORKS_STYLE)
+        dialog.resize(760, 650)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+
+        text = QPlainTextEdit(dialog)
+        text.setReadOnly(True)
+        text.setPlainText(
+            """EDYTOR ROZDWOJEŃ SPINÓW
+
+Edytor pokazuje takty wymagające poprawienia otwarć (*^) lub
+zamknięć (*v) rozdwojonych spinów. Każda kolumna „warstwa”
+odpowiada jednej gałęzi danego instrumentu.
+
+Wiersze zachowują numery z pliku źródłowego aż do zapisu.
+Nowe wiersze otrzymują opis zamiast numeru źródłowego.
+„Liczba spinów” obejmuje cały rekord, również niewidoczne
+w tym oknie instrumenty.
+
+
+WIDOK I EDYCJA
+
+Edytowalne pola mają niebieskawe tło. Instrumenty pomocnicze
+są tylko do odczytu i mają przyciemniony tekst.
+
+Pokaż oryginał — pozwala porównać szkic ze stanem źródłowym.
+Edytuj — przywraca widok szkicu z dotychczasowymi zmianami.
+Przełączanie widoku nie usuwa zmian.
+
+Poprzedni i Następny przechodzą między zakresami.
+Szkice są zachowywane podczas przechodzenia między nimi.
+
+
+
+KONTROLKA STANU
+
+Czerwona — zakres zawiera błąd lub pole wymagające uzupełnienia.
+Żółta — zakres przeszedł kontrolę, ale ma niezatwierdzone propozycje.
+Zielona — zakres przeszedł kontrolę i nie ma oczekujących propozycji.
+
+Zielony stan nie oznacza jeszcze zapisania pliku.
+Kontrola dotyczy bieżącego zakresu i obsługiwanych reguł.
+Nie zastępuje sprawdzenia zgodności nut z rękopisem.
+
+
+NAPRAWA
+
+Napraw rozdwojenia — wykonuje dostępne naprawy w bieżącym
+zakresie i proponuje uzupełnienie dodatkowych warstw.
+Całą operację można cofnąć jednym kliknięciem „Cofnij”.
+
+Przyciski pomocnicze:
+
+Połącz rozdwojenia — usuwa zbędne zamknięcia i ponowne
+otwarcia tej samej gałęzi w obrębie taktu.
+
+Przenieś rozdwojenie — przenosi otwarcie przed pierwsze
+dane taktu i proponuje wypełnienie dodanej warstwy.
+
+Przenieś scalenie — przenosi zamknięcie na koniec taktu
+i proponuje wypełnienie przedłużonej warstwy.
+
+Nieaktywne przyciski oznaczają, że dana operacja nie jest
+obecnie dostępna.
+
+
+ZASADY OTWIERANIA I ZAMYKANIA
+
+Otwarcia powinny występować przed pierwszym rekordem danych
+w takcie. Rekord zawierający kropki również jest rekordem danych.
+
+Scalenia powinny występować po ostatnich danych taktu.
+Po scaleniu mogą pozostać komentarze oraz końcowy blok scaleń.
+
+Sąsiadujące tokeny *v muszą zamykać komplet gałęzi jednego
+rozdwojenia. Scalenia różnych instrumentów mogą znajdować się
+w jednym wierszu, jeżeli rozdziela je neutralne pole *.
+
+Program zachowuje poprawne istniejące zamknięcia i próbuje
+dopisać scalenie do istniejącego wiersza. Nowy wiersz dodaje,
+gdy połączenie nie jest możliwe przy uwzględnieniu zasad. 
+Przy wyborze kolejności nowych zamknięć preferuje kierunek 
+od prawej do lewej. Inna poprawna kolejność nie jest błędem.
+
+
+PROPOZYCJE PAUZ
+
+Ukryte pauzy mają oznaczenie ryy. Kropka oznacza kontynuację
+wcześniejszego tokenu; sama nie rozpoczyna nowej pauzy.
+
+Program uwzględnia metrum, granice dostępnych wierszy oraz
+trwające wartości rytmiczne. Propozycje można edytować ręcznie.
+
+W metrach 6/8, 9/8 i 12/8 program pyta o zapis grup pauz:
+ćwierćnuta i ósemka albo ćwierćnuta z kropką.
+W 6/4 pyta o podział 3+3 albo 2+2+2.
+
+Zatwierdź propozycje — zatwierdza propozycje bieżącego zakresu.
+Nie zapisuje pliku.
+
+
+KLAWIATURA
+
+Tab / Shift+Tab — następne / poprzednie edytowalne pole.
+Strzałka w prawo na końcu tekstu — edytowalne pole po prawej.
+Strzałka w lewo na początku tekstu — edytowalne pole po lewej.
+Strzałki góra / dół — edytowalne pole w tej samej kolumnie.
+Pola tylko do odczytu są pomijane.
+
+
+COFANIE I ZAPIS
+
+Cofnij przywraca stan sprzed ostatniej operacji w bieżącym
+szkicu. Jedno kliknięcie przycisku naprawy stanowi jedną operację.
+
+Zatwierdź i zapisz wszystko — zapisuje zmiany ze wszystkich
+zmienionych zakresów, także tych aktualnie niewidocznych,
+i zatwierdza oczekujące propozycje.
+
+Przed zapisem każdy zmieniony zakres musi przejść kontrolę.
+Czerwony zakres blokuje zapis wszystkich zmian.
+
+Program sprawdza, czy plik na dysku nie zmienił się od wczytania.
+Po zapisie aktualizuje numery linii i rozpoczyna nowy stan
+źródłowy. Historia cofania szkiców zostaje wyczyszczona.
+
+Przy zamykaniu okna z niezapisanymi zmianami można je zapisać,
+odrzucić albo anulować zamknięcie.
+
+
+OGRANICZENIA
+
+Manipulatory *x i *+ oraz niektóre bardziej złożone przypadki
+strukturalne wymagają osobnej obsługi. Jeśli program nie może
+bezpiecznie przygotować naprawy, pokazuje komunikat.
+"""
+        )
+        layout.addWidget(text, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        close_button = QPushButton("Zamknij", dialog)
+        close_button.setObjectName("primaryButton")
+        close_button.clicked.connect(dialog.accept)
+        buttons.addWidget(close_button)
+        layout.addLayout(buttons)
+
+        dialog.exec()
 
     def _change_problem(self, step: int) -> None:
         button = self.next_button if step > 0 else self.previous_button
