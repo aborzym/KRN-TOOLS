@@ -1,4 +1,6 @@
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 
@@ -431,12 +433,25 @@ def group_split_issues(
                 continue
 
             if row.record.kind is RecordKind.INTERPRETATION:
+                closing_identities = {
+                    branch.identity
+                    for token, branch in zip(
+                        row.record.fields,
+                        row.branches,
+                        strict=True,
+                    )
+                    if token == "*v"
+                }
+                shared_closing = len(closing_identities) > 1 and all(
+                    token in {"*", "*v"} for token in row.record.fields
+                )
+
                 for token, branch in zip(
                     row.record.fields,
                     row.branches,
                     strict=True,
                 ):
-                    if token in {"*^", "*v"}:
+                    if token == "*^" or (token == "*v" and not shared_closing):
                         involved.add(branch.identity)
 
         ranges.append(
@@ -510,7 +525,7 @@ def build_measure_view(
         )
 
     opening_starts = {measure_start(line) for line in opening_lines}
-    first_line = min(opening_starts | {problem.start_line})
+    first_line = problem.start_line
     issue_lines = {issue.line_number for issue in all_issues}
 
     starts = [
@@ -1036,6 +1051,37 @@ class FragmentDraft:
             proposed_cells=tuple(proposed_cells),
         )
 
+    @contextmanager
+    def group_changes(self) -> Iterator[None]:
+        """Połącz operacje w jeden krok cofania i wycofaj je przy błędzie."""
+        before = (
+            self._changes.copy(),
+            self._replacements.copy(),
+            self._pending_suggestions.copy(),
+        )
+        history_start = len(self._undo)
+
+        try:
+            yield
+        except Exception:
+            (
+                self._changes,
+                self._replacements,
+                self._pending_suggestions,
+            ) = before
+            del self._undo[history_start:]
+            raise
+        else:
+            after = (
+                self._changes,
+                self._replacements,
+                self._pending_suggestions,
+            )
+            del self._undo[history_start:]
+
+            if after != before:
+                self._undo.append(before)
+
     def join_reopenings(
         self,
         source_line: int,
@@ -1266,6 +1312,58 @@ class FragmentDraft:
         # Cała grupa ma jeden wspólny stan sprzed operacji.
         del self._undo[history_start + 1 :]
         return True
+
+    def propose_hidden_rest_tokens(
+        self,
+        tokens: tuple[tuple[int, int, str, str], ...],
+    ) -> bool:
+        """Zaproponuj zamiany ukrytych pauz z kontrolą wcześniejszych tokenów."""
+        keys = [(line, column) for line, column, _, _ in tokens]
+        if len(set(keys)) != len(keys):
+            raise ValueError("Grupa propozycji powtarza to samo pole.")
+
+        changed = False
+
+        with self.group_changes():
+            for source_line, column, expected, proposed in tokens:
+                expected_allowed = (
+                    expected in {"", "."}
+                    or re.fullmatch(r"\d+(?:%\d+)?\.*ryy", expected) is not None
+                )
+                proposed_allowed = (
+                    proposed == "." or re.fullmatch(r"\d+(?:%\d+)?\.*ryy", proposed) is not None
+                )
+
+                if not expected_allowed or not proposed_allowed:
+                    raise ValueError(
+                        "Porządkowanie pauz nie może zastępować nut, "
+                        "zwykłych pauz ani tokenów z dodatkowymi oznaczeniami."
+                    )
+
+                row_index = self.rendered_index(source_line)
+                record = read_records(self.rendered_lines()[row_index].text)[0]
+
+                if record.kind is not RecordKind.DATA:
+                    raise ValueError("Propozycja dotyczy wiersza bez danych.")
+
+                if not 0 <= column < len(record.fields):
+                    raise ValueError("Kolumna propozycji nie istnieje.")
+
+                current = record.fields[column]
+                if current != expected:
+                    raise ValueError(
+                        f"Linia {source_line}: zawartość pola zmieniła się "
+                        "od przygotowania propozycji."
+                    )
+
+                if current == proposed:
+                    continue
+
+                self.edit_rendered_token(row_index, column, proposed)
+                self._pending_suggestions.add((source_line, column))
+                changed = True
+
+        return changed
 
     def approve_suggestions(self) -> bool:
         if not self._pending_suggestions:

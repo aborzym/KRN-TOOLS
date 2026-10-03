@@ -24,14 +24,21 @@ from PySide6.QtWidgets import (
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.meter_rhythm import meter_rest_options
-from spineworks.spine_rhythm import meter_at_line, suggest_merge_fill
+from spineworks.spine_rhythm import (
+    meter_at_line,
+    suggest_merge_fill,
+    suggest_reopening_fill,
+    suggest_split_fill,
+)
 from spineworks.spine_validation import (
     FragmentDraft,
+    RecordKind,
     build_draft_fragment_rows,
     build_fragment_rows,
     build_measure_view,
     find_split_issues,
     group_split_issues,
+    read_records,
     trace_spines,
     validate_draft,
 )
@@ -264,10 +271,18 @@ class SpineEditor(QWidget):
             self.title_label.setText("Nie wykryto problemów rozdwojenia spinów.")
             return
 
+        self._source_document = document
+        self._source_trace = trace
+        self._source_issues = issues
+        self._problems = problems
+        self._problem_index = 0
+        self._drafts: dict[int, FragmentDraft] = {}
+
         self.problem = problems[0]
         view = build_measure_view(trace, self.problem, issues)
         self.rows = build_fragment_rows(trace, self.problem, view)
         self.draft = FragmentDraft(document, self.rows)
+        self._drafts[0] = self.draft
         self.original_draft = FragmentDraft(document, self.rows)
         self._editing = False
 
@@ -283,7 +298,6 @@ class SpineEditor(QWidget):
         self.move_merge_button.setToolTip("Przenieś scalenie na koniec taktu.")
         self.move_merge_button.clicked.connect(self._move_merge)
         self.move_merge_button.hide()
-        title_row.insertWidget(2, self.move_merge_button)
 
         self.approve_button = QPushButton("Zatwierdź propozycje", self)
         self.approve_button.setFixedWidth(self.button_width)
@@ -291,14 +305,49 @@ class SpineEditor(QWidget):
         self.approve_button.setToolTip("Zatwierdź wszystkie oczekujące propozycje.")
         self.approve_button.clicked.connect(self._approve_suggestions)
         self.approve_button.hide()
-        title_row.insertWidget(3, self.approve_button)
+        title_row.insertWidget(2, self.approve_button)
 
         self.undo_button = QPushButton("Cofnij", self)
         self.undo_button.setFixedWidth(self.button_width)
         self.undo_button.setObjectName("primaryButton")
         self.undo_button.clicked.connect(self._undo)
         self.undo_button.hide()
-        title_row.insertWidget(4, self.undo_button)
+        title_row.insertWidget(3, self.undo_button)
+
+        navigation = QHBoxLayout()
+
+        self.move_split_button = QPushButton("Przenieś rozdwojenie", self)
+        self.move_split_button.setFixedWidth(self.button_width)
+        self.move_split_button.setObjectName("primaryButton")
+        self.move_split_button.setToolTip("Przenieś rozdwojenie przed pierwsze dane taktu.")
+        self.move_split_button.clicked.connect(self._move_split)
+        self.move_split_button.hide()
+
+        self.join_button = QPushButton("Połącz rozdwojenia", self)
+        self.join_button.setFixedWidth(self.button_width)
+        self.join_button.setObjectName("primaryButton")
+        self.join_button.setToolTip("Połącz zamknięcia i ponowne otwarcia w bieżącym takcie.")
+        self.join_button.clicked.connect(self._join_reopenings)
+        self.join_button.hide()
+
+        navigation.addWidget(self.join_button)
+        navigation.addWidget(self.move_split_button)
+        navigation.addWidget(self.move_merge_button)
+        navigation.addStretch()
+
+        self.previous_button = QPushButton("Poprzedni", self)
+        self.previous_button.setFixedWidth(self.button_width)
+        self.previous_button.setObjectName("primaryButton")
+        self.previous_button.clicked.connect(lambda: self._change_problem(-1))
+        navigation.addWidget(self.previous_button)
+
+        self.next_button = QPushButton("Następny", self)
+        self.next_button.setFixedWidth(self.button_width)
+        self.next_button.setObjectName("primaryButton")
+        self.next_button.clicked.connect(lambda: self._change_problem(1))
+        navigation.addWidget(self.next_button)
+
+        layout.addLayout(navigation)
 
         self.title_label.setText(f"Takt {self.problem.measure} · zakres 1 z {len(problems)}")
         self._show_rows()
@@ -308,6 +357,60 @@ class SpineEditor(QWidget):
             )
         )
         self.table.itemChanged.connect(self._edit_item)
+        self._update_validation()
+
+    def _change_problem(self, step: int) -> None:
+        button = self.next_button if step > 0 else self.previous_button
+        button.setFocus()
+
+        if not button.isEnabled():
+            return
+
+        self._load_problem(self._problem_index + step)
+
+    def _load_problem(self, index: int) -> None:
+        if not 0 <= index < len(self._problems):
+            return
+
+        self._problem_index = index
+        self.problem = self._problems[index]
+        view = build_measure_view(
+            self._source_trace,
+            self.problem,
+            self._source_issues,
+        )
+        self.rows = build_fragment_rows(
+            self._source_trace,
+            self.problem,
+            view,
+        )
+
+        if index not in self._drafts:
+            self._drafts[index] = FragmentDraft(
+                self._source_document,
+                self.rows,
+            )
+
+        self.draft = self._drafts[index]
+        self.original_draft = FragmentDraft(
+            self._source_document,
+            self.rows,
+        )
+        self._editing = True
+        self.view_button.setText("Pokaż oryginał")
+        self.move_merge_button.setVisible(True)
+        self.title_label.setText(
+            f"Takt {self.problem.measure} · zakres {index + 1} z {len(self._problems)}"
+        )
+
+        self.table.blockSignals(True)
+        try:
+            self._show_rows()
+        finally:
+            self.table.blockSignals(False)
+
+        self.table.verticalScrollBar().setValue(0)
+        self.table.horizontalScrollBar().setValue(0)
         self._update_validation()
 
     def _show_rows(self) -> None:
@@ -407,14 +510,23 @@ class SpineEditor(QWidget):
             item.setForeground(QColor(color))
             self.table.setItem(row, column, item)
 
+        self.table.setRowHeight(
+            0,
+            self.table.fontMetrics().height() * 2 + 12,
+        )
+
         for identity in identities:
             root = identity.root_column
             column = starts[root]
             label = f"{identity.instrument or 'Bez nazwy'} — {identity.spine_type}"
             helper = root not in editable_roots
+
             if helper:
-                label += " · pomocniczy"
+                label += "\npomocniczy"
+
             put(0, column, label, muted=helper)
+            self.table.item(0, column).setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
             if widths[root] > 1:
                 self.table.setSpan(0, column, 1, widths[root])
 
@@ -454,6 +566,42 @@ class SpineEditor(QWidget):
                     ),
                 )
                 offsets[root] = offset + 1
+
+        vertical_header = self.table.verticalHeader()
+        normal_height = vertical_header.defaultSectionSize()
+        barline_height = max(
+            self.table.fontMetrics().height() + 4,
+            normal_height - 5,
+        )
+        vertical_header.setMinimumSectionSize(barline_height)
+
+        helper_columns = {
+            starts[root] + offset
+            for root in starts
+            if root not in editable_roots
+            for offset in range(widths[root])
+        }
+
+        for table_row, row in enumerate(rows, start=1):
+            is_barline = row.kind is RecordKind.BARLINE
+            self.table.setRowHeight(
+                table_row,
+                barline_height if is_barline else normal_height,
+            )
+
+            if not is_barline:
+                continue
+
+            for column in range(column_count):
+                if column in spacers:
+                    continue
+
+                item = self.table.item(table_row, column)
+                if item is None:
+                    continue
+
+                item.setBackground(QColor("#342a20"))
+                item.setForeground(QColor("#9c8c76" if column in helper_columns else "#d7bd99"))
 
         header = self.table.horizontalHeader()
         header.setMinimumSectionSize(5)
@@ -526,6 +674,115 @@ class SpineEditor(QWidget):
                 )
                 self.table.setColumnWidth(column, required_width)
 
+    def _reopening_target(self) -> tuple[int, int] | None:
+        rendered = self.draft.rendered_lines()
+        positions = [
+            index
+            for index, line in enumerate(rendered)
+            if (
+                (
+                    reference := (
+                        line.source_line if line.source_line is not None else line.anchor_line
+                    )
+                )
+                is not None
+                and self.problem.start_line <= reference <= self.problem.end_line
+            )
+        ]
+        if not positions:
+            return None
+
+        rendered = rendered[: max(positions) + 1]
+        records = read_records("\n".join(line.text for line in rendered))
+        tracing_lines = [
+            "\t".join(token or "." for token in record.fields)
+            if record.kind is RecordKind.DATA
+            else record.text
+            for record in records
+        ]
+        trace = trace_spines(HumdrumDocument(tracing_lines, False))
+        if trace.issue is not None:
+            return None
+
+        editable_roots = {identity.root_column for identity in self.problem.editable_identities}
+
+        for index, row in enumerate(trace.records):
+            source_line = rendered[index].source_line
+            if source_line is None:
+                continue
+            if not self.problem.start_line <= source_line < self.problem.end_line:
+                continue
+
+            roots = {
+                branch.identity.root_column
+                for token, branch in zip(
+                    row.record.fields,
+                    row.branches,
+                    strict=True,
+                )
+                if token == "*v" and branch.identity.root_column in editable_roots
+            }
+
+            for following in trace.records[index + 1 :]:
+                if following.record.kind is RecordKind.BARLINE:
+                    break
+
+                for token, branch in zip(
+                    following.record.fields,
+                    following.branches,
+                    strict=True,
+                ):
+                    if token == "*^" and branch.identity.root_column in roots:
+                        return source_line, branch.identity.root_column
+
+        return None
+
+    def _split_target(self) -> tuple[int, int] | None:
+        rendered = self.draft.rendered_lines()
+
+        for issue in self.problem.issues:
+            if issue.code != "late_split":
+                continue
+
+            indices = [
+                index
+                for index, line in enumerate(rendered)
+                if line.source_line == issue.line_number
+            ]
+            if len(indices) != 1:
+                continue
+
+            index = indices[0]
+            fields = rendered[index].text.split("\t")
+            if "*^" not in fields:
+                continue
+
+            tracing_lines: list[str] = []
+            for line in rendered[: index + 1]:
+                records = read_records(line.text)
+                if records and records[0].kind is RecordKind.DATA:
+                    tracing_lines.append("\t".join(token or "." for token in records[0].fields))
+                else:
+                    tracing_lines.append(line.text)
+
+            trace = trace_spines(HumdrumDocument(tracing_lines, False))
+            if trace.issue is not None:
+                continue
+
+            selected = trace.records[-1]
+            roots = {identity.root_column for identity in issue.identities}
+
+            for token, branch in zip(
+                fields,
+                selected.branches,
+                strict=True,
+            ):
+                root = branch.identity.root_column
+                if token == "*^" and root in roots:
+                    return issue.line_number, root
+
+        return None
+
     def _merge_target(self) -> tuple[int, int] | None:
         rendered = self.draft.rendered_lines()
 
@@ -551,6 +808,230 @@ class SpineEditor(QWidget):
             )
 
         return None
+
+    def _join_reopenings(self) -> None:
+        self.join_button.setFocus()
+        target = self._reopening_target()
+        if target is None:
+            return
+
+        source_line, root_column = target
+
+        try:
+            rendered = self.draft.rendered_lines()
+            current_line = self.draft.rendered_index(source_line) + 1
+            analysis_end = len(rendered)
+
+            for index in range(current_line, len(rendered)):
+                records = read_records(rendered[index].text)
+                if records and records[0].kind is RecordKind.BARLINE:
+                    analysis_end = index + 1
+                    break
+
+            candidate = HumdrumDocument(
+                [line.text for line in rendered[:analysis_end]],
+                False,
+            )
+            trace = trace_spines(candidate)
+            if trace.issue is not None:
+                raise HumdrumError(trace.issue.message)
+
+            selected = next(row for row in trace.records if row.record.line_number == current_line)
+            identity = next(
+                branch.identity
+                for branch in selected.branches
+                if branch.identity.root_column == root_column
+            )
+
+            mapped_suggestions: list[tuple[int, int, str]] = []
+
+            if identity.spine_type == "**kern":
+                meter = meter_at_line(candidate, current_line, root_column)
+                options = meter_rest_options(meter)
+
+                if len(options) == 1:
+                    rest_option = options[0]
+                else:
+                    labels = [option.label for option in options]
+                    label, accepted = QInputDialog.getItem(
+                        self,
+                        "Podział pauz",
+                        (
+                            f"{identity.instrument or 'Bez nazwy'} — "
+                            f"{meter.numerator}/{meter.denominator}\n"
+                            "Wybierz sposób podziału ukrytych pauz:"
+                        ),
+                        labels,
+                        0,
+                        False,
+                    )
+                    if not accepted:
+                        return
+                    rest_option = options[labels.index(label)]
+
+                suggestions = suggest_reopening_fill(
+                    candidate,
+                    current_line,
+                    root_column,
+                    rest_option=rest_option,
+                )
+
+                for suggestion in suggestions:
+                    original_line = rendered[suggestion.source_line - 1].source_line
+                    if original_line is None:
+                        raise HumdrumError("Pole propozycji nie ma numeru linii źródłowej.")
+                    mapped_suggestions.append(
+                        (
+                            original_line,
+                            suggestion.source_column,
+                            suggestion.token,
+                        )
+                    )
+
+            with self.draft.group_changes():
+                proposal = self.draft.join_reopenings(*target)
+                if proposal is None:
+                    return
+
+                if identity.spine_type == "**kern":
+                    replacements: list[tuple[int, int, str, str]] = []
+                    joined_lines = self.draft.rendered_lines()
+
+                    for number, column, token in mapped_suggestions:
+                        row_index = self.draft.rendered_index(number)
+                        expected = joined_lines[row_index].text.split("\t")[column]
+                        replacements.append((number, column, expected, token))
+
+                    self.draft.propose_hidden_rest_tokens(tuple(replacements))
+                else:
+                    self.draft.propose_tokens(
+                        tuple((number, column, ".") for number, column in proposal.proposed_cells)
+                    )
+
+        except (ValueError, HumdrumError) as error:
+            self.report.setPlainText(str(error))
+            return
+
+        vertical = self.table.verticalScrollBar().value()
+        horizontal = self.table.horizontalScrollBar().value()
+
+        self.table.blockSignals(True)
+        try:
+            self._show_rows()
+        finally:
+            self.table.blockSignals(False)
+
+        self.table.verticalScrollBar().setValue(vertical)
+        self.table.horizontalScrollBar().setValue(horizontal)
+        self._update_validation()
+
+    def _move_split(self) -> None:
+        self.move_split_button.setFocus()
+        target = self._split_target()
+        if target is None:
+            return
+
+        source_line, root_column = target
+        moved = False
+
+        try:
+            rendered = self.draft.rendered_lines()
+            current_line = self.draft.rendered_index(source_line) + 1
+            analysis_end = len(rendered)
+
+            for index in range(current_line, len(rendered)):
+                records = read_records(rendered[index].text)
+                if records and records[0].kind is RecordKind.BARLINE:
+                    analysis_end = index + 1
+                    break
+
+            candidate = HumdrumDocument(
+                [line.text for line in rendered[:analysis_end]],
+                False,
+            )
+            trace = trace_spines(candidate)
+            if trace.issue is not None:
+                raise HumdrumError(trace.issue.message)
+
+            selected = next(row for row in trace.records if row.record.line_number == current_line)
+            identity = next(
+                branch.identity
+                for branch in selected.branches
+                if branch.identity.root_column == root_column
+            )
+
+            rest_option = None
+            if identity.spine_type == "**kern":
+                meter = meter_at_line(candidate, current_line, root_column)
+                options = meter_rest_options(meter)
+
+                if len(options) == 1:
+                    rest_option = options[0]
+                else:
+                    labels = [option.label for option in options]
+                    label, accepted = QInputDialog.getItem(
+                        self,
+                        "Podział pauz",
+                        (
+                            f"{identity.instrument or 'Bez nazwy'} — "
+                            f"{meter.numerator}/{meter.denominator}\n"
+                            "Wybierz sposób podziału ukrytych pauz:"
+                        ),
+                        labels,
+                        0,
+                        False,
+                    )
+                    if not accepted:
+                        return
+
+                    rest_option = options[labels.index(label)]
+
+            suggestions = suggest_split_fill(
+                candidate,
+                current_line,
+                root_column,
+                rest_option=rest_option,
+            )
+
+            tokens: list[tuple[int, int, str]] = []
+            for suggestion in suggestions:
+                original_line = rendered[suggestion.source_line - 1].source_line
+                if original_line is None:
+                    raise HumdrumError("Pole propozycji nie ma numeru linii źródłowej.")
+
+                tokens.append(
+                    (
+                        original_line,
+                        suggestion.source_column,
+                        suggestion.token,
+                    )
+                )
+
+            proposal = self.draft.move_split(*target)
+            if proposal is None:
+                return
+
+            moved = True
+            self.draft.propose_tokens(tuple(tokens))
+
+        except (ValueError, HumdrumError) as error:
+            if moved:
+                self.draft.undo()
+            self.report.setPlainText(str(error))
+            return
+
+        vertical = self.table.verticalScrollBar().value()
+        horizontal = self.table.horizontalScrollBar().value()
+
+        self.table.blockSignals(True)
+        try:
+            self._show_rows()
+        finally:
+            self.table.blockSignals(False)
+
+        self.table.verticalScrollBar().setValue(vertical)
+        self.table.horizontalScrollBar().setValue(horizontal)
+        self._update_validation()
 
     def _move_merge(self) -> None:
         self.move_merge_button.setFocus()
@@ -876,10 +1357,15 @@ class SpineEditor(QWidget):
             end_line=self.problem.end_line,
         )
         self.status_indicator.set_state(result.state)
+        self.view_button.setEnabled(self.draft.dirty or not self._editing)
         self.move_merge_button.setEnabled(self._editing and self._merge_target() is not None)
         self.approve_button.setVisible(self._editing and bool(self.draft.pending_suggestions))
         self.undo_button.setVisible(self._editing)
         self.undo_button.setEnabled(self.draft.can_undo)
+        self.move_split_button.setVisible(self._editing and self._split_target() is not None)
+        self.join_button.setVisible(self._editing and self._reopening_target() is not None)
+        self.previous_button.setEnabled(self._problem_index > 0)
+        self.next_button.setEnabled(self._problem_index + 1 < len(self._problems))
         instruments = list(
             dict.fromkeys(
                 identity.instrument or "Bez nazwy" for identity in self.problem.editable_identities

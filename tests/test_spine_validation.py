@@ -393,7 +393,7 @@ def test_preserves_opening_lines_through_nested_merges() -> None:
     assert trace.records[9].branches[0].opening_lines == ()
 
 
-def test_shows_opening_and_problem_measures_and_folds_middle() -> None:
+def test_shows_only_problem_measure_when_split_opened_earlier() -> None:
     document = HumdrumDocument.from_text(
         "**kern\n=43\n*^\n1c\t1ryy\n=44\t=44\n1d\t1ryy\n=45\t=45\n2e\t2ryy\n*v\t*v\n2f\n=46\n*-\n"
     )
@@ -404,16 +404,14 @@ def test_shows_opening_and_problem_measures_and_folds_middle() -> None:
     view = build_measure_view(trace, problem, issues)
 
     assert trace.issue is None
-    assert [item.measure for item in view] == ["43", "44", "45"]
-    assert [item.collapsed for item in view] == [False, True, False]
+    assert [item.measure for item in view] == ["45"]
+    assert [item.collapsed for item in view] == [False]
     assert [(item.start_line, item.end_line) for item in view] == [
-        (2, 5),
-        (5, 7),
         (7, 11),
     ]
 
 
-def test_does_not_fold_intermediate_measure_containing_an_issue() -> None:
+def test_earlier_measure_issue_does_not_expand_current_problem_view() -> None:
     document = HumdrumDocument.from_text(
         "**kern\n"
         "=43\n"
@@ -438,8 +436,12 @@ def test_does_not_fold_intermediate_measure_containing_an_issue() -> None:
     view = build_measure_view(trace, problem, issues)
 
     assert trace.issue is None
-    assert [item.measure for item in view] == ["43", "44", "45"]
+    assert any(issue.measure == "44" for issue in issues)
+    assert [item.measure for item in view] == ["45"]
     assert all(not item.collapsed for item in view)
+    assert [(item.start_line, item.end_line) for item in view] == [
+        (9, 13),
+    ]
 
 
 def test_separated_merges_do_not_create_problem_ranges() -> None:
@@ -2769,3 +2771,79 @@ def test_preserved_closing_keeps_existing_left_to_right_order() -> None:
     assert [row.source_line for row in closing] == [7, 8]
     assert closing[0].text == "*v\t*v\t*\t*v\t*v\t*\t*\t*"
     assert closing[1].text == document.lines[7]
+
+
+def test_group_changes_creates_one_undo_step() -> None:
+    _, draft = make_test_draft()
+    draft.edit_token(5, 0, "2d")
+    before_group = draft.to_text()
+
+    with draft.group_changes():
+        draft.edit_token(5, 0, "2e")
+        draft.edit_token(7, 0, "2f")
+
+    assert draft.to_text() != before_group
+    assert draft.undo() is True
+    assert draft.to_text() == before_group
+    assert draft.token(5, 0) == "2d"
+    assert draft.can_undo is True
+
+
+def test_group_changes_rolls_back_on_error() -> None:
+    _, draft = make_test_draft()
+    before_group = draft.to_text()
+
+    with pytest.raises(ValueError), draft.group_changes():
+        draft.move_merge(6, 0)
+        draft.propose_tokens(((7, 1, "2ryy"),))
+        raise ValueError("Przerwana naprawa.")
+
+    assert draft.to_text() == before_group
+    assert draft.pending_suggestions == ()
+    assert draft.can_undo is False
+
+
+def test_hidden_rest_proposals_share_one_undo_step() -> None:
+    _, draft = make_test_draft()
+    before = draft.to_text()
+
+    changed = draft.propose_hidden_rest_tokens(((5, 1, "2ryy", "4ryy"),))
+
+    assert changed is True
+    assert draft.token(5, 1) == "4ryy"
+    assert draft.pending_suggestions == ((5, 1),)
+
+    assert draft.undo() is True
+    assert draft.to_text() == before
+    assert draft.pending_suggestions == ()
+    assert draft.can_undo is False
+
+
+def test_hidden_rest_proposals_refuse_notes_and_roll_back() -> None:
+    _, draft = make_test_draft()
+    before = draft.to_text()
+
+    with pytest.raises(ValueError, match="nie może zastępować"):
+        draft.propose_hidden_rest_tokens(
+            (
+                (5, 1, "2ryy", "4ryy"),
+                (7, 0, "2d", "2ryy"),
+            )
+        )
+
+    assert draft.to_text() == before
+    assert draft.pending_suggestions == ()
+    assert draft.can_undo is False
+
+
+def test_hidden_rest_proposals_detect_changed_field() -> None:
+    _, draft = make_test_draft()
+    draft.edit_token(5, 1, "4ryy")
+    before = draft.to_text()
+
+    with pytest.raises(ValueError, match="zawartość pola zmieniła się"):
+        draft.propose_hidden_rest_tokens(((5, 1, "2ryy", "1ryy"),))
+
+    assert draft.to_text() == before
+    assert draft.pending_suggestions == ()
+    assert draft.token(5, 1) == "4ryy"

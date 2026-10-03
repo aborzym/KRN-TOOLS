@@ -1,8 +1,9 @@
+import re
 from dataclasses import dataclass
 from fractions import Fraction
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
-from spineworks.kern_rhythm import advance_kern_row, hidden_rest_token
+from spineworks.kern_rhythm import advance_kern_row, hidden_rest_token, kern_duration
 from spineworks.meter_rhythm import (
     MeterRestOption,
     MeterSignature,
@@ -14,9 +15,12 @@ from spineworks.spine_validation import (
     SpineBranch,
     StructureIssue,
     plan_merge_move,
+    plan_merge_reopening,
     plan_split_move,
     prepare_merge_extension,
+    prepare_merge_reopenings,
     prepare_split_move,
+    read_records,
     trace_spines,
 )
 
@@ -516,3 +520,208 @@ def _meter_fill_tokens(
         tokens[row.line_number] = rest.token
 
     return tokens
+
+
+def suggest_hidden_rest_span(
+    rows: tuple[TimedRecord, ...],
+    tokens: tuple[str, ...],
+    *,
+    source_column: int,
+    option: MeterRestOption,
+    measure_start: Fraction,
+    end_time: Fraction,
+) -> tuple[TokenSuggestion, ...]:
+    """Zaproponuj podział potwierdzonego odcinka ciszy w jednej warstwie."""
+    if len(rows) != len(tokens):
+        raise HumdrumError("Liczba tokenów nie odpowiada liczbie wierszy.")
+
+    if not rows:
+        return ()
+
+    for row, token in zip(rows, tokens, strict=True):
+        is_hidden_rest = (
+            re.fullmatch(
+                r"\d+(?:%\d+)?\.*ryy",
+                token,
+            )
+            is not None
+        )
+
+        if token not in {"", "."} and not is_hidden_rest:
+            raise HumdrumError(
+                f"Linia {row.line_number}: odcinek zawiera nutę, "
+                "zwykłą pauzę lub token wymagający ręcznej kontroli."
+            )
+
+    if tokens[0] == ".":
+        raise HumdrumError(
+            "Odcinek zaczyna się kontynuacją — trzeba ustalić "
+            "wcześniejszy token przed proponowaniem pauz."
+        )
+
+    proposed = _meter_fill_tokens(
+        rows,
+        option=option,
+        measure_start=measure_start,
+        active_until=rows[0].onset,
+        end_time=end_time,
+    )
+
+    return tuple(
+        TokenSuggestion(
+            source_line=row.line_number,
+            source_column=source_column,
+            token=proposed[row.line_number],
+        )
+        for row in rows
+    )
+
+
+def suggest_reopening_fill(
+    document: HumdrumDocument,
+    source_line: int,
+    root_column: int,
+    *,
+    rest_option: MeterRestOption,
+) -> tuple[TokenSuggestion, ...]:
+    """Zaproponuj pauzy po połączeniu zamknięć i ponownych otwarć."""
+    plan = plan_merge_reopening(document, source_line, root_column)
+    structure = trace_spines(document)
+
+    start_line = max(
+        (
+            row.record.line_number
+            for row in structure.records
+            if row.record.kind is RecordKind.BARLINE and row.record.line_number < source_line
+        ),
+        default=1,
+    )
+    end_line = next(
+        (
+            row.record.line_number
+            for row in structure.records
+            if row.record.kind is RecordKind.BARLINE and row.record.line_number > source_line
+        ),
+        None,
+    )
+    if end_line is None:
+        raise HumdrumError("Brak końcowej kreski taktu.")
+
+    document = HumdrumDocument(document.lines[:end_line], False)
+    if meter_at_line(document, source_line, root_column) != rest_option.meter:
+        raise HumdrumError("Wybrany podział pauz nie odpowiada metrum.")
+
+    rhythm = trace_rhythm(document)
+    if rhythm.issue is not None:
+        raise HumdrumError(f"Linia {rhythm.issue.line_number}: {rhythm.issue.message}")
+
+    times = {row.line_number: row for row in rhythm.records}
+    measure_start = times[start_line].onset
+    measure_end = times[end_line].onset
+    proposal = prepare_merge_reopenings(document, source_line, root_column)
+    replacements = dict(proposal.replacements)
+
+    mapped_lines: list[tuple[int, str]] = []
+    for number, text in enumerate(document.lines, start=1):
+        if number not in replacements:
+            mapped_lines.append((number, text))
+            continue
+
+        for line in replacements[number]:
+            if line.source_line is None:
+                raise HumdrumError("Wiersz połączenia nie ma numeru źródłowego.")
+            mapped_lines.append((line.source_line, line.text))
+
+    records = read_records("\n".join(text for _, text in mapped_lines))
+    tracing_lines = [
+        "\t".join(token or "." for token in record.fields)
+        if record.kind is RecordKind.DATA
+        else record.text
+        for record in records
+    ]
+    joined = trace_spines(HumdrumDocument(tracing_lines, False))
+    if joined.issue is not None:
+        raise HumdrumError(joined.issue.message)
+
+    path = plan.branches[1].path
+    suggestions: list[TokenSuggestion] = []
+    span_rows: list[TimedRecord] = []
+    span_tokens: list[str] = []
+    span_columns: list[int] = []
+    blocked_until = measure_start
+
+    original_start = next(row for row in structure.records if row.record.line_number == start_line)
+    for column, branch in enumerate(original_start.branches):
+        if branch.identity == plan.identity and branch.path == path:
+            blocked_until += times[start_line].remaining_before[column]
+            break
+
+    def finish_span(end_time: Fraction) -> None:
+        if not span_rows:
+            return
+
+        proposed = suggest_hidden_rest_span(
+            tuple(span_rows),
+            tuple(span_tokens),
+            source_column=0,
+            option=rest_option,
+            measure_start=measure_start,
+            end_time=end_time,
+        )
+        for item, column in zip(proposed, span_columns, strict=True):
+            suggestions.append(TokenSuggestion(item.source_line, column, item.token))
+
+        span_rows.clear()
+        span_tokens.clear()
+        span_columns.clear()
+
+    for index, row in enumerate(joined.records):
+        number = mapped_lines[index][0]
+        record = records[index]
+        if not start_line <= number < end_line:
+            continue
+        if record.kind is not RecordKind.DATA:
+            continue
+
+        columns = [
+            column
+            for column, branch in enumerate(row.branches)
+            if branch.identity == plan.identity and branch.path == path
+        ]
+        if not columns:
+            finish_span(times[number].onset)
+            continue
+        if len(columns) != 1:
+            raise HumdrumError("Nie można jednoznacznie ustalić dodatkowej warstwy.")
+
+        column = columns[0]
+        token = record.fields[column]
+        timed = times[number]
+        is_hidden_rest = re.fullmatch(r"\d+(?:%\d+)?\.*ryy", token) is not None
+
+        if token in {"", "."} and timed.onset < blocked_until:
+            if token == "":
+                suggestions.append(TokenSuggestion(number, column, "."))
+            continue
+
+        if is_hidden_rest or token == "" or (token == "." and span_rows):
+            if is_hidden_rest:
+                duration = kern_duration(token)
+                if duration is None or timed.onset + duration > measure_end:
+                    raise HumdrumError(f"Linia {number}: ukryta pauza wykracza poza takt.")
+
+            span_rows.append(timed)
+            span_tokens.append(token)
+            span_columns.append(column)
+            continue
+
+        finish_span(timed.onset)
+
+        if token != ".":
+            duration = kern_duration(token)
+            if duration is None:
+                raise HumdrumError(f"Linia {number}: nie można ustalić długości tokenu.")
+            blocked_until = timed.onset + duration
+
+    finish_span(measure_end)
+    return tuple(suggestions)
