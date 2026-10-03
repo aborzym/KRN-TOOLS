@@ -311,8 +311,8 @@ class SpineEditor(QWidget):
         self.undo_button.setFixedWidth(self.button_width)
         self.undo_button.setObjectName("primaryButton")
         self.undo_button.clicked.connect(self._undo)
-        self.undo_button.hide()
-        title_row.insertWidget(3, self.undo_button)
+        self.undo_button.setEnabled(False)
+        title_row.insertWidget(2, self.undo_button)
 
         navigation = QHBoxLayout()
 
@@ -932,7 +932,6 @@ class SpineEditor(QWidget):
             return
 
         source_line, root_column = target
-        moved = False
 
         try:
             rendered = self.draft.rendered_lines()
@@ -1007,16 +1006,14 @@ class SpineEditor(QWidget):
                     )
                 )
 
-            proposal = self.draft.move_split(*target)
-            if proposal is None:
-                return
+            with self.draft.group_changes():
+                proposal = self.draft.move_split(*target)
+                if proposal is None:
+                    return
 
-            moved = True
-            self.draft.propose_tokens(tuple(tokens))
+                self.draft.propose_tokens(tuple(tokens))
 
         except (ValueError, HumdrumError) as error:
-            if moved:
-                self.draft.undo()
             self.report.setPlainText(str(error))
             return
 
@@ -1040,7 +1037,6 @@ class SpineEditor(QWidget):
             return
 
         source_line, root_column = target
-        moved = False
 
         try:
             rendered = self.draft.rendered_lines()
@@ -1112,53 +1108,25 @@ class SpineEditor(QWidget):
                     )
                 )
 
-            timing_start = perf_counter()
-            proposal = self.draft.move_merge(*target)
-            print(
-                f"Przeniesienie scalenia: {perf_counter() - timing_start:.3f} s",
-                flush=True,
-            )
-            if proposal is None:
-                return
+            with self.draft.group_changes():
+                timing_start = perf_counter()
+                proposal = self.draft.move_merge(*target)
+                print(
+                    f"Przeniesienie scalenia: {perf_counter() - timing_start:.3f} s",
+                    flush=True,
+                )
+                if proposal is None:
+                    return
 
-            moved = True
-            timing_start = perf_counter()
-            self.draft.propose_tokens(tuple(tokens))
-            print(
-                f"Wpisanie propozycji: {perf_counter() - timing_start:.3f} s",
-                flush=True,
-            )
+                timing_start = perf_counter()
+                self.draft.propose_tokens(tuple(tokens))
+                print(
+                    f"Wpisanie propozycji: {perf_counter() - timing_start:.3f} s",
+                    flush=True,
+                )
 
         except (ValueError, HumdrumError) as error:
-            if moved:
-                self.draft.undo()
             self.report.setPlainText(str(error))
-            return
-
-        vertical = self.table.verticalScrollBar().value()
-        horizontal = self.table.horizontalScrollBar().value()
-
-        self.table.blockSignals(True)
-        try:
-            self._show_rows()
-        finally:
-            self.table.blockSignals(False)
-
-        self.table.verticalScrollBar().setValue(vertical)
-        self.table.horizontalScrollBar().setValue(horizontal)
-        self._update_validation()
-        self.move_merge_button.setFocus()
-        target = self._merge_target()
-        if target is None:
-            return
-
-        try:
-            proposal = self.draft.move_merge(*target)
-        except (ValueError, HumdrumError) as error:
-            self.report.setPlainText(str(error))
-            return
-
-        if proposal is None:
             return
 
         vertical = self.table.verticalScrollBar().value()
@@ -1360,8 +1328,8 @@ class SpineEditor(QWidget):
         self.view_button.setEnabled(self.draft.dirty or not self._editing)
         self.move_merge_button.setEnabled(self._editing and self._merge_target() is not None)
         self.approve_button.setVisible(self._editing and bool(self.draft.pending_suggestions))
-        self.undo_button.setVisible(self._editing)
-        self.undo_button.setEnabled(self.draft.can_undo)
+        self.undo_button.setVisible(True)
+        self.undo_button.setEnabled(self._editing and self.draft.can_undo)
         self.move_split_button.setVisible(self._editing and self._split_target() is not None)
         self.join_button.setVisible(self._editing and self._reopening_target() is not None)
         self.previous_button.setEnabled(self._problem_index > 0)
