@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -44,6 +45,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -206,7 +208,34 @@ class MainWindow(QMainWindow):
         open_action = QAction("Otwórz", self)
         open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self.open_file)
-        toolbar.addAction(open_action)
+        self.addAction(open_action)
+
+        self.recent_files_menu = QMenu(self)
+        self.recent_files_menu.aboutToShow.connect(self._populate_recent_files_menu)
+
+        self.recent_files_button = QToolButton(self)
+        self.recent_files_button.setDefaultAction(open_action)
+        self.recent_files_button.setMenu(self.recent_files_menu)
+        self.recent_files_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.recent_files_button.setToolTip("Otwórz plik · strzałka: ostatnio otwierane pliki")
+        self.recent_files_button.setStyleSheet(
+            """
+            QToolButton {
+                padding-right: 18px;
+            }
+            QToolButton::menu-button {
+                width: 16px;
+                border: 0;
+                border-top-right-radius: 10px;
+                border-bottom-right-radius: 10px;
+                background: transparent;
+            }
+            QToolButton::menu-button:hover {
+                background: #294333;
+            }
+            """
+        )
+        toolbar.addWidget(self.recent_files_button)
 
         self.save_action = QAction("Zapisz", self)
         self.save_action.setShortcut(QKeySequence.StandardKey.Save)
@@ -445,6 +474,28 @@ class MainWindow(QMainWindow):
         if test_path.is_file():
             self.load_path(test_path)
 
+    def _remember_recent_file(self, path: Path) -> None:
+        filename = str(path.expanduser().resolve())
+        recent = self.settings.value("files/recent", [], type=list)
+        recent = [filename, *(entry for entry in recent if entry != filename)]
+        self.settings.setValue("files/recent", recent[:10])
+
+    def _populate_recent_files_menu(self) -> None:
+        self.recent_files_menu.clear()
+        recent = self.settings.value("files/recent", [], type=list)
+
+        if not recent:
+            action = self.recent_files_menu.addAction("Brak ostatnio otwieranych plików")
+            action.setEnabled(False)
+            return
+
+        for filename in recent[:10]:
+            path = Path(filename)
+            label = f"{path.name} — {path.parent}"
+            action = self.recent_files_menu.addAction(label.replace("&", "&&"))
+            action.setToolTip(str(path))
+            action.triggered.connect(lambda checked=False, selected=path: self.load_path(selected))
+
     def open_file(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
             self, "Otwórz plik Humdrum", "", "Pliki Humdrum (*.krn);;Wszystkie pliki (*)"
@@ -498,6 +549,7 @@ class MainWindow(QMainWindow):
         self.file_label.setText(path.name)
         self._refresh_table()
         self.table.verticalHeader().setVisible(True)
+        self._remember_recent_file(path)
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
 
     def open_spine_editor(self) -> None:
@@ -597,6 +649,7 @@ class MainWindow(QMainWindow):
         self.file_label.setText(path.name)
         self._refresh_table()
         self._update_window_title()
+        self._remember_recent_file(path)
         self.statusBar().showMessage(f"Zapisano jako {path.name}")
         return True
 
