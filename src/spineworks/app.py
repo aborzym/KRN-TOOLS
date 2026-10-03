@@ -59,6 +59,7 @@ from spineworks.filters import (
     run_barnum,
 )
 from spineworks.humdrum import HumdrumDocument, HumdrumError
+from spineworks.spine_editor import SpineEditor
 from spineworks.theme import SPINEWORKS_STYLE
 from spineworks.updater import UpdateManager
 
@@ -413,6 +414,17 @@ class MainWindow(QMainWindow):
         )
         operations.addWidget(self.compact_records_button, 2, 3)
 
+        self.spine_editor_button = QPushButton("Napraw rozdwojenia")
+        self.spine_editor_button.setObjectName("primaryButton")
+        self.spine_editor_button.setEnabled(False)
+        self.spine_editor_button.setToolTip("Otwórz edytor rozdwojeń i scaleń spinów.")
+        self.spine_editor_button.clicked.connect(self.open_spine_editor)
+        self.spine_editor_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        operations.addWidget(self.spine_editor_button, 2, 4)
+
         self.propagate_button = QPushButton("Uzupełnij i popraw przypisania spine’ów")
         self.propagate_button.setObjectName("primaryButton")
         self.propagate_button.setEnabled(False)
@@ -479,6 +491,7 @@ class MainWindow(QMainWindow):
             any(spine_type == "**kern" for spine_type in document.spine_types)
         )
         self.compact_records_button.setEnabled(True)
+        self.spine_editor_button.setEnabled(True)
         self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
@@ -486,6 +499,49 @@ class MainWindow(QMainWindow):
         self._refresh_table()
         self.table.verticalHeader().setVisible(True)
         self.statusBar().showMessage(f"Wczytano {document.spine_count} spine’ów")
+
+    def open_spine_editor(self) -> None:
+        if self.document is None or self.current_path is None:
+            return
+
+        self.spine_editor_button.setFocus()
+
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        if self.document.to_text() != self.saved_text:
+            answer = QMessageBox.question(
+                self,
+                "Zapis przed otwarciem edytora",
+                "Przed otwarciem edytora rozdwojeń trzeba zapisać "
+                "bieżące zmiany, aby numery linii odpowiadały plikowi.\n\n"
+                "Zapisać i otworzyć edytor?",
+                QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Save,
+            )
+            if answer != QMessageBox.StandardButton.Save:
+                return
+            if not self.save_file():
+                return
+
+        path = self.current_path
+
+        try:
+            document = HumdrumDocument.from_path(path)
+            before = document.to_text()
+            editor = SpineEditor(document, self, file_path=path)
+            editor.exec()
+            after = HumdrumDocument.from_path(path).to_text()
+        except (OSError, UnicodeError, HumdrumError) as error:
+            QMessageBox.critical(
+                self,
+                "Edytor rozdwojeń",
+                str(error),
+            )
+            return
+
+        if after != before or after != self.saved_text:
+            self.load_path(path)
 
     def save_file(self) -> bool:
         if self.document is None or self.current_path is None:

@@ -7,6 +7,7 @@ from PySide6.QtGui import QCloseEvent, QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QApplication,
+    QDialog,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -201,7 +202,7 @@ class CellGridDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-class SpineEditor(QWidget):
+class SpineEditor(QDialog):
     """Widok pierwszego zakresu wymagającego korekty."""
 
     def __init__(
