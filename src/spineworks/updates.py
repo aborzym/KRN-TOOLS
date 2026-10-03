@@ -52,6 +52,46 @@ def expected_asset_name(
     return None
 
 
+def release_history_notes(
+    releases: list[dict[str, Any]],
+    *,
+    current_version: str,
+    latest_version: str,
+) -> str:
+    """Połącz opisy stabilnych wydań pomiędzy obecną a docelową wersją."""
+    current = version_tuple(current_version)
+    latest = version_tuple(latest_version)
+    selected: dict[tuple[int, int, int], str] = {}
+
+    for release in releases:
+        if not isinstance(release, dict):
+            continue
+        if release.get("draft") or release.get("prerelease"):
+            continue
+
+        tag = release.get("tag_name")
+        if not isinstance(tag, str):
+            continue
+
+        try:
+            version = version_tuple(tag)
+        except ValueError:
+            continue
+
+        if not current < version <= latest:
+            continue
+
+        body = release.get("body")
+        notes = body.strip() if isinstance(body, str) else ""
+        selected[version] = notes or "Autor nie dołączył opisu zmian do tego wydania."
+
+    sections = [
+        f"# SPINEWORKS {'.'.join(map(str, version))}\n\n{notes}"
+        for version, notes in sorted(selected.items())
+    ]
+    return "\n\n---\n\n".join(sections)
+
+
 def update_from_release(
     release: dict[str, Any],
     *,

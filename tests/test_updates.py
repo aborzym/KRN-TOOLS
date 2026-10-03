@@ -6,6 +6,7 @@ from spineworks.updater import UpdateManager
 from spineworks.updates import (
     expected_asset_name,
     is_newer_version,
+    release_history_notes,
     update_from_release,
     version_tuple,
 )
@@ -181,3 +182,67 @@ def test_macos_update_helper_verifies_and_safely_replaces_application() -> None:
     assert '/bin/mv "$backup_app" "$target_app"' in script
     assert '/usr/bin/open "$target_app"' in script
     assert '/bin/rm -rf "$work_directory"' in script
+
+
+def test_release_history_includes_only_versions_between_current_and_target() -> None:
+    releases = [
+        {"tag_name": "v2.4.2", "body": "Poprawiona ikona"},
+        {"tag_name": "v2.3.0", "body": "Już zainstalowane"},
+        {"tag_name": "v2.4.0", "body": "Edytor rozdwojeń"},
+        {"tag_name": "v2.5.0", "body": "Poza docelową aktualizacją"},
+        {"tag_name": "v2.4.1", "body": "Ostatnie pliki"},
+    ]
+
+    notes = release_history_notes(
+        releases,
+        current_version="2.3.0",
+        latest_version="2.4.2",
+    )
+
+    assert notes == (
+        "# SPINEWORKS 2.4.0\n\nEdytor rozdwojeń"
+        "\n\n---\n\n"
+        "# SPINEWORKS 2.4.1\n\nOstatnie pliki"
+        "\n\n---\n\n"
+        "# SPINEWORKS 2.4.2\n\nPoprawiona ikona"
+    )
+
+
+def test_release_history_ignores_drafts_prereleases_and_invalid_tags() -> None:
+    notes = release_history_notes(
+        [
+            {"tag_name": "v2.4.0", "body": "Szkic", "draft": True},
+            {"tag_name": "v2.4.1", "body": "Testowe", "prerelease": True},
+            {"tag_name": "nightly", "body": "Nieprawidłowy tag"},
+            {"body": "Brak tagu"},
+            {"tag_name": "v2.4.2", "body": "Stabilne"},
+        ],
+        current_version="2.3.0",
+        latest_version="2.4.2",
+    )
+
+    assert notes == "# SPINEWORKS 2.4.2\n\nStabilne"
+
+
+def test_release_history_handles_missing_notes_and_duplicate_versions() -> None:
+    notes = release_history_notes(
+        [
+            {"tag_name": "v2.4.0", "body": None},
+            {"tag_name": "v2.4.0", "body": "   "},
+        ],
+        current_version="2.3.0",
+        latest_version="2.4.0",
+    )
+
+    assert notes == ("# SPINEWORKS 2.4.0\n\nAutor nie dołączył opisu zmian do tego wydania.")
+
+
+def test_release_history_is_empty_when_no_newer_stable_release_exists() -> None:
+    assert (
+        release_history_notes(
+            [{"tag_name": "v2.4.2", "body": "Już zainstalowane"}],
+            current_version="2.4.2",
+            latest_version="2.4.2",
+        )
+        == ""
+    )

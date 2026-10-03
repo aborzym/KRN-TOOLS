@@ -7,6 +7,7 @@ import platform
 import shutil
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QSettings, Qt, QUrl
@@ -24,7 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from spineworks.updates import UpdateInfo, update_from_release
+from spineworks.updates import UpdateInfo, release_history_notes, update_from_release
 
 LATEST_RELEASE_API_URL = "https://api.github.com/repos/aborzym/KRN-TOOLS/releases/latest"
 
@@ -137,7 +138,92 @@ class UpdateManager(QObject):
                 )
             return
 
-        self._show_update_dialog(update)
+        self._show_status("Pobieranie historii zmian…")
+        self._fetch_release_history(update, [release])
+
+    def _fetch_release_history(
+        self,
+        update: UpdateInfo,
+        releases: list[dict],
+        *,
+        page: int = 1,
+    ) -> None:
+        url = f"https://api.github.com/repos/aborzym/KRN-TOOLS/releases?per_page=100&page={page}"
+        request = QNetworkRequest(QUrl(url))
+        request.setRawHeader(b"Accept", b"application/vnd.github+json")
+        request.setRawHeader(b"X-GitHub-Api-Version", b"2022-11-28")
+        request.setRawHeader(
+            b"User-Agent",
+            f"SPINEWORKS/{self.current_version}".encode("ascii"),
+        )
+        request.setTransferTimeout(15000)
+
+        reply = self.network_manager.get(request)
+        reply.finished.connect(
+            lambda: self._finish_release_history(
+                reply,
+                update,
+                releases,
+                page=page,
+            )
+        )
+
+    def _finish_release_history(
+        self,
+        reply: QNetworkReply,
+        update: UpdateInfo,
+        releases: list[dict],
+        *,
+        page: int,
+    ) -> None:
+        status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+        response = bytes(reply.readAll())
+        network_error = reply.error()
+        reply.deleteLater()
+
+        if (
+            network_error != QNetworkReply.NetworkError.NoError
+            or status is None
+            or not 200 <= int(status) < 300
+        ):
+            self._show_history_fallback(update)
+            return
+
+        try:
+            batch = json.loads(response.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            self._show_history_fallback(update)
+            return
+
+        if not isinstance(batch, list) or any(not isinstance(release, dict) for release in batch):
+            self._show_history_fallback(update)
+            return
+
+        collected = [*releases, *batch]
+
+        if len(batch) == 100:
+            self._fetch_release_history(
+                update,
+                collected,
+                page=page + 1,
+            )
+            return
+
+        notes = release_history_notes(
+            collected,
+            current_version=self.current_version,
+            latest_version=update.version,
+        )
+        self._show_status("")
+        self._show_update_dialog(replace(update, notes=notes))
+
+    def _show_history_fallback(self, update: UpdateInfo) -> None:
+        notes = (
+            "Nie udało się pobrać pełnej historii zmian. "
+            "Poniżej opis najnowszego wydania.\n\n" + update.notes
+        )
+        self._show_status("")
+        self._show_update_dialog(replace(update, notes=notes))
 
     def _show_update_dialog(self, update: UpdateInfo) -> None:
         dialog = QDialog(self.parent_widget)
@@ -154,7 +240,7 @@ class UpdateManager(QObject):
         title.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(title)
 
-        description = QLabel("Co nowego:", dialog)
+        description = QLabel("Zmiany od obecnie używanej wersji:", dialog)
         layout.addWidget(description)
 
         notes = QTextBrowser(dialog)
