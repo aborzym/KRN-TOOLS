@@ -362,3 +362,100 @@ def test_split_fill_proposes_dots_for_non_kern_spine() -> None:
     assert [(item.source_line, item.source_column, item.token) for item in suggestions] == [
         (3, 1, "."),
     ]
+
+
+def test_multimeasure_rest_keeps_remaining_duration_across_barlines() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "*M4/4\t*M4/4\n"
+        "=1\t=1\n"
+        "00r\t1c\n"
+        "=2\t=2\n"
+        ".\t1d\n"
+        "=3\t=3\n"
+        ".\t1e\n"
+        "=4\t=4\n"
+        ".\t1f\n"
+        "=5\t=5\n"
+        "1r\t1g\n"
+        "*-\t*-\n"
+    )
+
+    rhythm = trace_rhythm(document)
+    rows = {row.line_number: row for row in rhythm.records}
+
+    assert rhythm.issue is None
+    assert rows[6].remaining_before[0] == Fraction(3)
+    assert rows[8].remaining_before[0] == Fraction(2)
+    assert rows[10].remaining_before[0] == Fraction(1)
+    assert rows[12].remaining_before[0] == Fraction(0)
+    assert rows[12].onset == Fraction(4)
+
+
+def test_rejects_new_rest_inside_multimeasure_rest() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n*M4/4\t*M4/4\n=1\t=1\n00r\t1c\n=2\t=2\n1r\t1d\n*-\t*-\n"
+    )
+
+    rhythm = trace_rhythm(document)
+
+    assert rhythm.issue is not None
+    assert rhythm.issue.line_number == 6
+    assert "przed zakończeniem poprzedniej wartości" in rhythm.issue.message
+
+
+def test_split_fill_continues_multimeasure_rest_without_new_rest() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "*M4/4\t*M4/4\n"
+        "=1\t=1\n"
+        "00r\t1c\n"
+        "=2\t=2\n"
+        ".\t2d\n"
+        "*^\t*\n"
+        ".\t.\t2e\n"
+        "=3\t=3\t=3\n"
+        ".\t.\t1f\n"
+        "=4\t=4\t=4\n"
+        ".\t.\t1g\n"
+        "=5\t=5\t=5\n"
+        "1r\t1r\t1a\n"
+        "*-\t*-\t*-\n"
+    )
+
+    suggestions = suggest_split_fill(document, source_line=7, root_column=0)
+
+    assert len(suggestions) == 1
+    assert suggestions[0].source_line == 6
+    assert suggestions[0].source_column == 1
+    assert suggestions[0].token == "."
+    assert document.lines[3] == "00r\t1c"
+
+
+def test_merge_fill_continues_multimeasure_rest_without_new_rest() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\t**kern\n"
+        "*M4/4\t*M4/4\n"
+        "=1\t=1\n"
+        "*^\t*\n"
+        "00r\t00ryy\t1c\n"
+        "=2\t=2\t=2\n"
+        ".\t.\t2d\n"
+        "*v\t*v\t*\n"
+        ".\t2e\n"
+        "=3\t=3\n"
+        ".\t1f\n"
+        "=4\t=4\n"
+        ".\t1g\n"
+        "=5\t=5\n"
+        "1r\t1a\n"
+        "*-\t*-\n"
+    )
+
+    suggestions = suggest_merge_fill(document, source_line=8, root_column=0)
+
+    assert len(suggestions) == 1
+    assert suggestions[0].source_line == 9
+    assert suggestions[0].source_column == 1
+    assert suggestions[0].token == "."
+    assert document.lines[4] == "00r\t00ryy\t1c"
