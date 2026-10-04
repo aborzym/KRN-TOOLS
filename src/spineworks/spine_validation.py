@@ -1625,7 +1625,7 @@ def validate_draft(
             messages.append(f"{location(issue.line_number)}: {issue.message}")
 
     if not messages:
-        rhythm = trace_rhythm(document)
+        rhythm = trace_rhythm(document, structure=trace)
         if rhythm.issue is not None and rhythm.issue.line_number <= current_end:
             messages.append(f"{location(rhythm.issue.line_number)}: {rhythm.issue.message}")
 

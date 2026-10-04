@@ -13,7 +13,9 @@ from spineworks.meter_rhythm import (
 from spineworks.spine_validation import (
     RecordKind,
     SpineBranch,
+    SpineTrace,
     StructureIssue,
+    TracedRecord,
     plan_merge_move,
     plan_merge_reopening,
     plan_split_move,
@@ -110,27 +112,93 @@ class RhythmTrace:
     issue: StructureIssue | None
 
 
-def trace_rhythm(document: HumdrumDocument) -> RhythmTrace:
-    """Odczytaj oś czasu bez zmieniania dokumentu."""
-    structure = trace_spines(document)
-    timed: list[TimedRecord] = []
+@dataclass(frozen=True)
+class RhythmCheckpoint:
+    previous: tuple[SpineBranch, ...]
+    remaining: tuple[Fraction, ...]
+    current_time: Fraction
+    initialized: bool
+
+
+@dataclass
+class RhythmCache:
+    source_records: tuple[TracedRecord, ...] = ()
+    timed_records: tuple[TimedRecord, ...] = ()
+    checkpoints: tuple[RhythmCheckpoint, ...] = ()
+
+
+def trace_rhythm(
+    document: HumdrumDocument,
+    *,
+    structure: SpineTrace | None = None,
+    cache: RhythmCache | None = None,
+) -> RhythmTrace:
+    """Odczytaj rytm, wykorzystując stan niezmienionego początku."""
+    if structure is None:
+        structure = trace_spines(document)
+
+    prefix = 0
+    if cache is not None:
+        limit = min(
+            len(structure.records),
+            len(cache.source_records),
+            len(cache.timed_records),
+            len(cache.checkpoints),
+        )
+        if structure.issue is not None:
+            limit = min(limit, structure.issue.line_number - 1)
+
+        while prefix < limit and structure.records[prefix] == cache.source_records[prefix]:
+            prefix += 1
+
+    timed = list(cache.timed_records[:prefix]) if cache is not None else []
+    checkpoints = list(cache.checkpoints[:prefix]) if cache is not None else []
+
     previous: tuple[SpineBranch, ...] = ()
     remaining: tuple[Fraction, ...] = ()
     current_time = Fraction(0)
     initialized = False
 
-    for row in structure.records:
+    if prefix:
+        checkpoint = checkpoints[-1]
+        previous = checkpoint.previous
+        remaining = checkpoint.remaining
+        current_time = checkpoint.current_time
+        initialized = checkpoint.initialized
+
+    def remember_state() -> None:
+        if cache is not None:
+            checkpoints.append(
+                RhythmCheckpoint(
+                    previous=previous,
+                    remaining=remaining,
+                    current_time=current_time,
+                    initialized=initialized,
+                )
+            )
+
+    def finish(issue: StructureIssue | None) -> RhythmTrace:
+        result = RhythmTrace(tuple(timed), issue)
+        if cache is not None:
+            cache.source_records = structure.records[: len(timed)]
+            cache.timed_records = result.records
+            cache.checkpoints = tuple(checkpoints)
+        return result
+
+    for row in structure.records[prefix:]:
         record = row.record
 
         if structure.issue is not None and record.line_number >= structure.issue.line_number:
-            return RhythmTrace(tuple(timed), structure.issue)
+            return finish(structure.issue)
 
         if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
             timed.append(TimedRecord(record.line_number, current_time, Fraction(0)))
+            remember_state()
             continue
 
         if not row.branches:
             timed.append(TimedRecord(record.line_number, current_time, Fraction(0)))
+            remember_state()
             continue
 
         try:
@@ -175,10 +243,7 @@ def trace_rhythm(document: HumdrumDocument) -> RhythmTrace:
                 remaining = tuple(updated)
 
         except HumdrumError as error:
-            return RhythmTrace(
-                records=tuple(timed),
-                issue=StructureIssue(record.line_number, str(error)),
-            )
+            return finish(StructureIssue(record.line_number, str(error)))
 
         timed.append(
             TimedRecord(
@@ -190,8 +255,9 @@ def trace_rhythm(document: HumdrumDocument) -> RhythmTrace:
         )
         current_time += elapsed
         previous = row.branches
+        remember_state()
 
-    return RhythmTrace(tuple(timed), structure.issue)
+    return finish(structure.issue)
 
 
 @dataclass(frozen=True)
