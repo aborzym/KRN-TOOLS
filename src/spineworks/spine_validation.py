@@ -655,6 +655,9 @@ class FragmentDraft:
         document: HumdrumDocument,
         rows: tuple[FragmentRow, ...],
     ) -> None:
+        from spineworks.spine_rhythm import RhythmCache
+
+        self._rhythm_cache = RhythmCache()
         self.original_text = document.to_text()
         self._source_lines = tuple(document.lines)
         self._trailing_newline = document.trailing_newline
@@ -1625,7 +1628,11 @@ def validate_draft(
             messages.append(f"{location(issue.line_number)}: {issue.message}")
 
     if not messages:
-        rhythm = trace_rhythm(document, structure=trace)
+        rhythm = trace_rhythm(
+            document,
+            structure=trace,
+            cache=draft._rhythm_cache,
+        )
         if rhythm.issue is not None and rhythm.issue.line_number <= current_end:
             messages.append(f"{location(rhythm.issue.line_number)}: {rhythm.issue.message}")
 

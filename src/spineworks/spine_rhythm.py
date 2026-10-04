@@ -273,6 +273,7 @@ def suggest_merge_fill(
     root_column: int,
     *,
     rest_option: MeterRestOption | None = None,
+    cache: RhythmCache | None = None,
 ) -> tuple[TokenSuggestion, ...]:
     """Zaproponuj wypełnienie dodatkowych głosów bez edycji dokumentu."""
     plan = plan_merge_move(document, source_line, root_column)
@@ -292,12 +293,12 @@ def suggest_merge_fill(
             for column in row.proposed_columns
         )
 
-    rhythm = trace_rhythm(document)
+    structure = trace_spines(document)
+    rhythm = trace_rhythm(document, structure=structure, cache=cache)
     if rhythm.issue is not None and rhythm.issue.line_number <= plan.end_barline:
         raise HumdrumError(f"Linia {rhythm.issue.line_number}: {rhythm.issue.message}")
 
     times = {row.line_number: row for row in rhythm.records}
-    structure = trace_spines(document)
     selected = next(row for row in structure.records if row.record.line_number == source_line)
     columns = [
         column
@@ -403,6 +404,7 @@ def suggest_split_fill(
     root_column: int,
     *,
     rest_option: MeterRestOption | None = None,
+    cache: RhythmCache | None = None,
 ) -> tuple[TokenSuggestion, ...]:
     """Zaproponuj wypełnienie głosu przed pierwotnym *^."""
     plan = plan_split_move(document, source_line, root_column)
@@ -414,12 +416,12 @@ def suggest_split_fill(
     if plan.identity.spine_type != "**kern":
         return tuple(TokenSuggestion(line, column, ".") for line, column in proposal.proposed_cells)
 
-    rhythm = trace_rhythm(document)
+    structure = trace_spines(document)
+    rhythm = trace_rhythm(document, structure=structure, cache=cache)
     if rhythm.issue is not None and rhythm.issue.line_number <= source_line:
         raise HumdrumError(f"Linia {rhythm.issue.line_number}: {rhythm.issue.message}")
 
     times = {row.line_number: row for row in rhythm.records}
-    structure = trace_spines(document)
     target = next(row for row in structure.records if row.record.line_number == plan.target_line)
     column = target.branches.index(plan.branch)
     target_time = times[plan.target_line]
@@ -655,6 +657,7 @@ def suggest_reopening_fill(
     root_column: int,
     *,
     rest_option: MeterRestOption,
+    cache: RhythmCache | None = None,
 ) -> tuple[TokenSuggestion, ...]:
     """Zaproponuj pauzy po połączeniu zamknięć i ponownych otwarć."""
     plan = plan_merge_reopening(document, source_line, root_column)
@@ -683,7 +686,7 @@ def suggest_reopening_fill(
     if meter_at_line(document, source_line, root_column) != rest_option.meter:
         raise HumdrumError("Wybrany podział pauz nie odpowiada metrum.")
 
-    rhythm = trace_rhythm(document)
+    rhythm = trace_rhythm(document, cache=cache)
     if rhythm.issue is not None:
         raise HumdrumError(f"Linia {rhythm.issue.line_number}: {rhythm.issue.message}")
 
