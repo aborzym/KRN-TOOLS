@@ -63,6 +63,7 @@ from spineworks.filters import (
     run_addic,
     run_barnum,
 )
+from spineworks.hidden_ties import repair_hidden_ties
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.spine_editor import SpineEditor
 from spineworks.theme import SPINEWORKS_STYLE
@@ -464,9 +465,38 @@ class MainWindow(QMainWindow):
         self.propagate_button.setEnabled(False)
         self.propagate_button.clicked.connect(self.propagate_assignments)
         self.propagate_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        operations.addWidget(self.propagate_button, 3, 0, 1, 5)
+        self.hidden_ties_button = QPushButton("Usuń błędne ligatury ukrytych nut")
+        self.hidden_ties_button.setObjectName("primaryButton")
+        self.hidden_ties_button.setEnabled(False)
+        self.hidden_ties_button.setToolTip(
+            "Usuwa błędne ligatury przez kreskę taktową z udziałem "
+            "ukrytych nut. Zachowuje poprawne ligatury."
+        )
+        self.hidden_ties_button.clicked.connect(self.apply_hidden_tie_repair)
+        self.hidden_ties_button.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
         layout.addLayout(operations)
 
+        cleanup_row = QHBoxLayout()
+        cleanup_row.setSpacing(12)
+        cleanup_row.addStretch()
+
+        self.propagate_button.setText("Popraw przypisania")
+        self.propagate_button.setToolTip("Uzupełnij i popraw przypisania part i staff do spine’ów.")
+        self.hidden_ties_button.setText("Popraw ukryte ligatury")
+
+        for button in (self.propagate_button, self.hidden_ties_button):
+            button.setFixedWidth(220)
+            button.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+            cleanup_row.addWidget(button)
+
+        cleanup_row.addStretch()
+        layout.addLayout(cleanup_row)
         preview_row = QHBoxLayout()
         preview_row.setContentsMargins(0, 8, 0, 0)
         preview_row.addStretch()
@@ -991,6 +1021,45 @@ class MainWindow(QMainWindow):
                 "Nie można otworzyć przeglądarki",
                 "Nie udało się otworzyć GitHuba. Raport został skopiowany do schowka.",
             )
+
+    def apply_hidden_tie_repair(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        before = self.document.to_text()
+        try:
+            document, repairs, warnings = repair_hidden_ties(self.document)
+        except HumdrumError as error:
+            QMessageBox.warning(
+                self,
+                "Nie można poprawić ligatur",
+                str(error),
+            )
+            return
+
+        count = sum(len(repair.start_notes) for repair in repairs)
+        if document.to_text() != before:
+            self.undo_texts.append(before)
+            self.document = document
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self._update_window_title()
+            message = f"Usunięto błędne ligatury: {count}"
+        else:
+            message = "Nie znaleziono błędnych ligatur ukrytych nut"
+
+        self.statusBar().showMessage(message)
+
+        if warnings:
+            box = QMessageBox(self)
+            box.setWindowTitle("Ligatury wymagające sprawdzenia")
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setText(message)
+            box.setInformativeText(f"Pozostawiono niejednoznaczne przypadki: {len(warnings)}.")
+            box.setDetailedText("\n".join(warnings))
+            box.exec()
 
     def apply_text_italics(self) -> None:
         if self.document is None:
@@ -2151,6 +2220,7 @@ class MainWindow(QMainWindow):
             any(spine_type == "**kern" for spine_type in self.document.spine_types)
         )
         self.compact_records_button.setEnabled(True)
+        self.hidden_ties_button.setEnabled("**kern" in self.document.spine_types)
 
         self.system_decoration_input.blockSignals(True)
         self.system_decoration_input.setText(self.document.system_decoration())
