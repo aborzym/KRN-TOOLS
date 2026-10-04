@@ -8,6 +8,7 @@ from PySide6.QtGui import QCloseEvent, QColor, QKeyEvent, QKeySequence, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QApplication,
+    QCheckBox,
     QDialog,
     QHBoxLayout,
     QHeaderView,
@@ -330,7 +331,17 @@ class SpineEditor(QDialog):
         )
         title_row.addWidget(self.help_button)
         layout.addLayout(title_row)
+        self._show_all_spines = False
+        scope_row = QHBoxLayout()
+        self.all_spines_button = QPushButton("Pokaż wszystkie spiny", self)
+        self.all_spines_button.clicked.connect(self._toggle_all_spines)
+        scope_row.addWidget(self.all_spines_button)
 
+        self.separate_preview_checkbox = QCheckBox("W osobnym oknie", self)
+        scope_row.addWidget(self.separate_preview_checkbox)
+
+        scope_row.addStretch()
+        layout.addLayout(scope_row)
         self.table = CopyableTableWidget(self)
         self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
@@ -701,29 +712,123 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
         self.table.horizontalScrollBar().setValue(0)
         self._update_validation()
 
-    def _show_rows(self) -> None:
-        if self._editing:
+    def _toggle_all_spines(self) -> None:
+        self.all_spines_button.setFocus()
+
+        if self.separate_preview_checkbox.isChecked():
+            self._open_all_spines_window()
+            return
+
+        vertical = self.table.verticalScrollBar().value()
+        self._show_all_spines = not self._show_all_spines
+        self.all_spines_button.setText(
+            "Pokaż wybrane spiny" if self._show_all_spines else "Pokaż wszystkie spiny"
+        )
+
+        previous = self.table.blockSignals(True)
+        self.table.setUpdatesEnabled(False)
+        try:
+            self._show_rows()
+        finally:
+            self.table.blockSignals(previous)
+            self.table.setUpdatesEnabled(True)
+
+        self.table.verticalScrollBar().setValue(vertical)
+        self.table.horizontalScrollBar().setValue(0)
+
+    def _open_all_spines_window(self) -> None:
+        window = QDialog(self)
+        window.setWindowTitle(f"SPINEWORKS — wszystkie spiny · takt {self.problem.measure}")
+        window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        window.resize(1400, 800)
+        window.setStyleSheet(SPINEWORKS_STYLE)
+
+        layout = QVBoxLayout(window)
+        layout.setContentsMargins(12, 12, 12, 12)
+
+        description = QLabel(
+            "Podgląd zakresu — "
+            + ("aktualny szkic" if self._editing else "oryginał")
+            + ". Możesz zaznaczać i kopiować komórki.",
+            window,
+        )
+        description.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(description)
+
+        table = CopyableTableWidget(window)
+        table.setObjectName("splitTable")
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().hide()
+        layout.addWidget(table)
+
+        self._show_rows(
+            table,
+            show_all=True,
+            read_only=True,
+        )
+
+        window.show()
+
+    def _show_rows(
+        self,
+        table: QTableWidget | None = None,
+        *,
+        show_all: bool | None = None,
+        read_only: bool = False,
+    ) -> None:
+        if table is None:
+            table = self.table
+        if show_all is None:
+            show_all = self._show_all_spines
+
+        editable_roots = {identity.root_column for identity in self.problem.editable_identities}
+        helper_roots = {identity.root_column for identity in self.problem.helper_identities}
+        start_line = min(row.source_line for row in self.rows)
+        end_line = max(row.source_line for row in self.rows)
+
+        if show_all:
+            all_roots = {
+                branch.identity.root_column
+                for traced in self._source_trace.records
+                if start_line <= traced.record.line_number <= end_line
+                for branch in traced.branches
+            }
             rows = build_draft_fragment_rows(
-                self.draft,
-                start_line=min(row.source_line for row in self.rows),
-                end_line=max(row.source_line for row in self.rows),
-                editable_roots={
-                    identity.root_column for identity in self.problem.editable_identities
-                },
-                helper_roots={identity.root_column for identity in self.problem.helper_identities},
+                self.draft if self._editing else self.original_draft,
+                start_line=start_line,
+                end_line=end_line,
+                editable_roots=editable_roots,
+                helper_roots=all_roots - editable_roots,
+            )
+            identities_by_root = {
+                cell.identity.root_column: cell.identity for row in rows for cell in row.cells
+            }
+            identities = sorted(
+                identities_by_root.values(),
+                key=lambda identity: identity.root_column,
             )
         else:
-            rows = self.rows
+            if self._editing:
+                rows = build_draft_fragment_rows(
+                    self.draft,
+                    start_line=start_line,
+                    end_line=end_line,
+                    editable_roots=editable_roots,
+                    helper_roots=helper_roots,
+                )
+            else:
+                rows = self.rows
 
-        identities = sorted(
-            (
-                *self.problem.editable_identities,
-                *self.problem.helper_identities,
-            ),
-            key=lambda identity: identity.root_column,
-        )
-        editable_roots = {identity.root_column for identity in self.problem.editable_identities}
-
+            identities = sorted(
+                (
+                    *self.problem.editable_identities,
+                    *self.problem.helper_identities,
+                ),
+                key=lambda identity: identity.root_column,
+            )
         starts: dict[int, int] = {}
         widths: dict[int, int] = {}
         spacers: set[int] = set()
@@ -745,16 +850,17 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             headers.extend(f"Warstwa {voice + 1}" for voice in range(widths[root]))
             column_count += widths[root]
 
-        self.table.clearSpans()
-        self.table.clear()
-        self.table.setColumnCount(column_count)
-        self.table.setRowCount(len(rows) + 1)
-        self.table.setHorizontalHeaderLabels(headers)
-        self.table.setShowGrid(False)
-        delegate = CellGridDelegate(spacers, self.table)
-        delegate.navigation_requested.connect(self._navigate_cell)
-        self.table.setItemDelegate(delegate)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        table.clearSpans()
+        table.clear()
+        table.setColumnCount(column_count)
+        table.setRowCount(len(rows) + 1)
+        table.setHorizontalHeaderLabels(headers)
+        table.setShowGrid(False)
+        delegate = CellGridDelegate(spacers, table)
+        if not read_only:
+            delegate.navigation_requested.connect(self._navigate_cell)
+        table.setItemDelegate(delegate)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
 
         pending_cells = set(self.draft.pending_suggestions) if self._editing else set()
 
@@ -772,7 +878,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             if column < 2:
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-            if editable and self._editing:
+            if editable and self._editing and not read_only:
                 flags |= Qt.ItemFlag.ItemIsEditable
             item.setFlags(flags)
 
@@ -796,27 +902,44 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 color = "#dce7f5" if editable else "#e7f4eb"
 
             item.setForeground(QColor(color))
-            self.table.setItem(row, column, item)
+            table.setItem(row, column, item)
 
-        self.table.setRowHeight(
+        table.setRowHeight(
             0,
-            self.table.fontMetrics().height() * 2 + 12,
+            table.fontMetrics().height() * 2 + 12,
         )
 
         for identity in identities:
             root = identity.root_column
             column = starts[root]
-            label = f"{identity.instrument or 'Bez nazwy'} — {identity.spine_type}"
+            instrument = identity.instrument or "Bez nazwy"
+
+            if identity.spine_type != "**kern":
+                owner = next(
+                    (
+                        branch.identity
+                        for traced in reversed(self._source_trace.records)
+                        if traced.record.line_number <= start_line
+                        for branch in reversed(traced.branches)
+                        if branch.identity.root_column < root
+                        and branch.identity.spine_type == "**kern"
+                    ),
+                    None,
+                )
+                instrument = (
+                    f"[{owner.instrument or 'Bez nazwy'}]"
+                    if owner is not None
+                    else f"[{instrument}]"
+                )
+
+            label = f"{instrument}  · {identity.spine_type}"
             helper = root not in editable_roots
 
-            if helper:
-                label += "\npomocniczy"
-
             put(0, column, label, muted=helper)
-            self.table.item(0, column).setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.item(0, column).setTextAlignment(Qt.AlignmentFlag.AlignCenter)
 
             if widths[root] > 1:
-                self.table.setSpan(0, column, 1, widths[root])
+                table.setSpan(0, column, 1, widths[root])
 
         for table_row, row in enumerate(rows, start=1):
             line_label = str(row.source_line) if row.source_line is not None else row.description
@@ -830,7 +953,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             if row.global_text:
                 put(table_row, 3, row.global_text)
                 if column_count > 4:
-                    self.table.setSpan(
+                    table.setSpan(
                         table_row,
                         3,
                         1,
@@ -855,10 +978,10 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 )
                 offsets[root] = offset + 1
 
-        vertical_header = self.table.verticalHeader()
+        vertical_header = table.verticalHeader()
         normal_height = vertical_header.defaultSectionSize()
         barline_height = max(
-            self.table.fontMetrics().height() + 4,
+            table.fontMetrics().height() + 4,
             normal_height - 5,
         )
         vertical_header.setMinimumSectionSize(barline_height)
@@ -872,7 +995,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
 
         for table_row, row in enumerate(rows, start=1):
             is_barline = row.kind is RecordKind.BARLINE
-            self.table.setRowHeight(
+            table.setRowHeight(
                 table_row,
                 barline_height if is_barline else normal_height,
             )
@@ -884,14 +1007,14 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 if column in spacers:
                     continue
 
-                item = self.table.item(table_row, column)
+                item = table.item(table_row, column)
                 if item is None:
                     continue
 
                 item.setBackground(QColor("#342a20"))
                 item.setForeground(QColor("#9c8c76" if column in helper_columns else "#d7bd99"))
 
-        header = self.table.horizontalHeader()
+        header = table.horizontalHeader()
         header.setMinimumSectionSize(5)
 
         for column in spacers:
@@ -899,19 +1022,19 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 column,
                 QHeaderView.ResizeMode.Fixed,
             )
-            self.table.setColumnWidth(column, 5)
+            table.setColumnWidth(column, 5)
 
-            for row in range(self.table.rowCount()):
+            for row in range(table.rowCount()):
                 # Komentarz globalny może obejmować kilka grup.
-                if self.table.columnSpan(row, 3) > 1 and column > 3:
+                if table.columnSpan(row, 3) > 1 and column > 3:
                     continue
 
-                spacer = QWidget(self.table)
+                spacer = QWidget(table)
                 spacer.setStyleSheet("background: #101713;")
-                self.table.setCellWidget(row, column, spacer)
+                table.setCellWidget(row, column, spacer)
 
-        self.table.setHorizontalHeader(SpacerHeader(spacers, self.table))
-        header = self.table.horizontalHeader()
+        table.setHorizontalHeader(SpacerHeader(spacers, table))
+        header = table.horizontalHeader()
         header.show()
         header.setStyleSheet(
             """
@@ -936,8 +1059,8 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 column,
                 QHeaderView.ResizeMode.Fixed,
             )
-            self.table.setColumnWidth(column, 5)
-        metrics = self.table.fontMetrics()
+            table.setColumnWidth(column, 5)
+        metrics = table.fontMetrics()
         base_width = metrics.horizontalAdvance("Warstwa 1") + 32
 
         for identity in identities:
@@ -946,10 +1069,10 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 column = starts[root] + offset
                 required_width = base_width
 
-                for row in range(1, self.table.rowCount()):
-                    if self.table.columnSpan(row, column) > 1:
+                for row in range(1, table.rowCount()):
+                    if table.columnSpan(row, column) > 1:
                         continue
-                    item = self.table.item(row, column)
+                    item = table.item(row, column)
                     if item is not None:
                         required_width = max(
                             required_width,
@@ -960,7 +1083,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                     column,
                     QHeaderView.ResizeMode.Interactive,
                 )
-                self.table.setColumnWidth(column, required_width)
+                table.setColumnWidth(column, required_width)
 
     def _target_structure(self):
         rendered = self.draft.rendered_lines()
