@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 import sys
 from itertools import pairwise
 from pathlib import Path
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -51,6 +53,7 @@ from PySide6.QtWidgets import (
 )
 
 from spineworks import __version__
+from spineworks.chrome_preview import ChromePreview
 from spineworks.filters import (
     HumdrumToolError,
     compact_records,
@@ -103,6 +106,8 @@ class MainWindow(QMainWindow):
         self._load_humdrum_tool_paths()
         self.document: HumdrumDocument | None = None
         self.current_path: Path | None = None
+        self.chrome_previews: dict[Path, ChromePreview] = {}
+        self.saved_text: str | None = None
         self.saved_text: str | None = None
         self.field_edits_dirty = False
         self.undo_texts: list[str] = []
@@ -462,11 +467,90 @@ class MainWindow(QMainWindow):
         operations.addWidget(self.propagate_button, 3, 0, 1, 5)
         layout.addLayout(operations)
 
+        preview_row = QHBoxLayout()
+        preview_row.setContentsMargins(0, 8, 0, 0)
+        preview_row.addStretch()
+
+        self.chrome_button = QPushButton("Otwórz w Chrome", self)
+        self.chrome_button.setObjectName("chromeButton")
+        self.chrome_button.clicked.connect(self.open_in_chrome)
+        self.chrome_button.setToolTip("Otwórz zapisany plik w VHV.")
+        self.chrome_button.setStyleSheet(
+            """
+            QPushButton#chromeButton {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #4189d4,
+                    stop: 0.45 #245fa8,
+                    stop: 1 #19477e
+                );
+                color: white;
+                border: 1px solid #356fae;
+                border-top: 1px solid #80b7ed;
+                border-bottom: 3px solid #102f56;
+                border-radius: 8px;
+                padding: 8px 18px;
+                font-weight: 600;
+            }
+            QPushButton#chromeButton:hover {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #529ce8,
+                    stop: 0.45 #2e73c4,
+                    stop: 1 #20558f
+                );
+            }
+            QPushButton#chromeButton:pressed {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 #19477e,
+                    stop: 1 #245fa8
+                );
+                border-top: 2px solid #102f56;
+                border-bottom: 1px solid #356fae;
+                padding-top: 9px;
+                padding-bottom: 8px;
+            }
+            """
+        )
+        preview_row.addWidget(self.chrome_button)
+        layout.addLayout(preview_row)
+
         self.setCentralWidget(central)
         version_label = QLabel(f"© 2026 Andrzej Borzym · SPINEWORKS {__version__}")
         version_label.setObjectName("versionLabel")
         self.statusBar().addPermanentWidget(version_label)
         self.statusBar().showMessage("Gotowe")
+
+    def open_in_chrome(self) -> None:
+        if self.document is None or self.current_path is None:
+            self.statusBar().showMessage("Najpierw otwórz plik .krn")
+            return
+
+        if not self._confirm_unsaved_changes():
+            return
+
+        path = self.current_path.expanduser().resolve()
+        preview = self.chrome_previews.get(path)
+        created = preview is None
+
+        try:
+            if preview is None:
+                preview = ChromePreview(path)
+                self.chrome_previews[path] = preview
+            preview.open()
+        except (OSError, subprocess.TimeoutExpired) as error:
+            if created and preview is not None:
+                preview.close()
+                self.chrome_previews.pop(path, None)
+            QMessageBox.warning(
+                self,
+                "Nie można otworzyć Chrome",
+                str(error),
+            )
+            return
+
+        self.statusBar().showMessage("Otwarto zapisany plik w VHV w Chrome.")
 
     def _load_test_file(self) -> None:
         project_root = Path(__file__).resolve().parents[2]
@@ -678,6 +762,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._confirm_unsaved_changes():
+            for preview in self.chrome_previews.values():
+                preview.close()
+            self.chrome_previews.clear()
             event.accept()
         else:
             event.ignore()
@@ -2298,6 +2385,20 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self) -> None:
         self.setStyleSheet(SPINEWORKS_STYLE)
+
+        buttons = [
+            *self.findChildren(QPushButton),
+            *self.findChildren(QToolButton),
+        ]
+        for button in buttons:
+            if button.graphicsEffect() is not None:
+                continue
+
+            shadow = QGraphicsDropShadowEffect(button)
+            shadow.setBlurRadius(6)
+            shadow.setOffset(0, 1)
+            shadow.setColor(QColor(0, 0, 0, 65))
+            button.setGraphicsEffect(shadow)
 
 
 def main() -> int:
