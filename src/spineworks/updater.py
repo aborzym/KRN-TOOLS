@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QSettings, Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QTextBlockFormat, QTextCursor
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication,
@@ -227,25 +227,90 @@ class UpdateManager(QObject):
 
     def _show_update_dialog(self, update: UpdateInfo) -> None:
         dialog = QDialog(self.parent_widget)
-        dialog.setWindowTitle("Dostępna aktualizacja")
-        dialog.resize(680, 470)
+        dialog.setWindowTitle("Aktualizacja SPINEWORKS")
+        dialog.resize(820, 620)
+        dialog.setMinimumSize(740, 520)
 
         layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 24, 24, 20)
+        layout.setSpacing(14)
 
         title = QLabel(
-            f"<b>Dostępna jest wersja SPINEWORKS {update.version}</b><br>"
-            f"Obecnie używana wersja: {self.current_version}",
+            f"SPINEWORKS {update.version}",
             dialog,
         )
-        title.setTextFormat(Qt.TextFormat.RichText)
+        title.setTextFormat(Qt.TextFormat.PlainText)
+        title.setStyleSheet("font-size: 24px; font-weight: 700;")
         layout.addWidget(title)
 
-        description = QLabel("Zmiany od obecnie używanej wersji:", dialog)
+        subtitle = QLabel(
+            f"Dostępna aktualizacja · Twoja wersja: {self.current_version}",
+            dialog,
+        )
+        subtitle.setTextFormat(Qt.TextFormat.PlainText)
+        subtitle.setStyleSheet("font-size: 13px;")
+        layout.addWidget(subtitle)
+
+        description = QLabel("Co nowego od Twojej wersji", dialog)
+        description.setStyleSheet("font-size: 15px; font-weight: 600; margin-top: 8px;")
         layout.addWidget(description)
 
         notes = QTextBrowser(dialog)
         notes.setOpenExternalLinks(True)
+        notes.setObjectName("updateHistory")
+        notes.setStyleSheet(
+            "QTextBrowser#updateHistory {"
+            " background-color: #09120d;"
+            " color: #e5efe8;"
+            " border: 1px solid #355344;"
+            " border-radius: 10px;"
+            " padding: 14px;"
+            " font-size: 14px;"
+            "}"
+            "QTextBrowser#updateHistory QWidget {"
+            " background-color: #09120d;"
+            "}"
+        )
+        notes.document().setDefaultStyleSheet(
+            "body { font-size: 14px; }"
+            "h1 { font-size: 21px; margin-top: 20px; margin-bottom: 10px; }"
+            "h2 { font-size: 18px; margin-top: 18px; margin-bottom: 8px; }"
+            "h3 { font-size: 15px; margin-top: 14px; margin-bottom: 6px; }"
+            "p { margin-top: 6px; margin-bottom: 10px; }"
+            "li { margin-bottom: 6px; }"
+        )
         notes.setMarkdown(update.notes.strip() or "Autor nie dołączył opisu zmian do tego wydania.")
+        document = notes.document()
+        document.setDocumentMargin(22)
+
+        block = document.begin()
+        while block.isValid():
+            cursor = QTextCursor(block)
+            block_format = block.blockFormat()
+            heading_level = block_format.headingLevel()
+
+            block_format.setLineHeight(
+                140,
+                QTextBlockFormat.LineHeightTypes.ProportionalHeight.value,
+            )
+
+            if heading_level == 1:
+                block_format.setTopMargin(8 if block == document.begin() else 32)
+                block_format.setBottomMargin(18)
+            elif heading_level:
+                block_format.setTopMargin(26)
+                block_format.setBottomMargin(12)
+            elif block.textList() is not None:
+                block_format.setTopMargin(4)
+                block_format.setBottomMargin(10)
+            else:
+                block_format.setTopMargin(8)
+                block_format.setBottomMargin(14)
+
+            cursor.setBlockFormat(block_format)
+            block = block.next()
+
+        layout.addWidget(notes, 1)
         layout.addWidget(notes, 1)
 
         size_megabytes = update.asset_size / (1024 * 1024)
@@ -275,6 +340,8 @@ class UpdateManager(QObject):
         )
 
         install_button.clicked.connect(dialog.accept)
+        install_button.setDefault(True)
+        install_button.setMinimumHeight(36)
         later_button.clicked.connect(dialog.reject)
         skip_button.clicked.connect(lambda: self._skip_version(update.version, dialog))
         release_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(update.release_url)))
