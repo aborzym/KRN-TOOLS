@@ -1124,24 +1124,6 @@ class FragmentDraft:
         if not replacements:
             return False
 
-        rows = {row.record.line_number: row for row in trace.records}
-
-        for number, replacement in replacements:
-            if replacement:
-                continue
-
-            row = rows[number]
-            for token, branch in zip(
-                row.record.fields,
-                row.branches,
-                strict=True,
-            ):
-                if (
-                    token.startswith("*clef")
-                    and branch.identity.root_column not in self._editable_roots
-                ):
-                    raise ValueError("Klucz należy do instrumentu tylko do odczytu.")
-
         return self._apply_candidate_replacements(replacements)
 
     def join_reopenings(
@@ -2227,6 +2209,13 @@ def prepare_split_move(
 
     target = rows[plan.target_line]
     target_column = target.branches.index(plan.branch)
+    combine_opening = (
+        target.record.kind is RecordKind.INTERPRETATION
+        and all(token in {"*", "*^"} for token in target.record.fields)
+        and "*^" in target.record.fields
+        and target.record.fields[target_column] == "*"
+    )
+
     opening_fields = ["*"] * len(target.branches)
     opening_fields[target_column] = "*^"
     opening = DraftLine(
@@ -2239,6 +2228,17 @@ def prepare_split_move(
     for line_number in range(plan.target_line, plan.source_line):
         row = rows[line_number]
         record = row.record
+
+        if line_number == plan.target_line and combine_opening:
+            fields = list(record.fields)
+            fields[target_column] = "*^"
+            replacements[line_number] = (
+                DraftLine(
+                    source_line=line_number,
+                    text="\t".join(fields),
+                ),
+            )
+            continue
 
         if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
             continue
@@ -2929,10 +2929,10 @@ def prepare_clef_reordering(
                     "nie można przypisać klucza do wcześniejszych warstw."
                 )
 
-            for column in destinations:
-                if fields[column] not in {"*", token}:
-                    raise HumdrumError("Sprzeczne klucze w jednej warstwie.")
-                fields[column] = token
+            column = min(destinations)
+            if fields[column] not in {"*", token}:
+                raise HumdrumError("Sprzeczne klucze w jednej warstwie.")
+            fields[column] = token
 
         moved.append(
             DraftLine(

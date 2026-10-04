@@ -2868,7 +2868,7 @@ def test_moves_final_clef_before_merges_and_preserves_closing_rows() -> None:
 
     assert replacements[7] == ()
     assert len(replacements[5]) == 2
-    assert replacements[5][0].text == "*\t*\t*\t*clefC4\t*clefC4"
+    assert replacements[5][0].text == "*\t*\t*\t*clefC4\t*"
     assert replacements[5][0].source_line is None
     assert replacements[5][0].anchor_line == 5
     assert replacements[5][1].text == document.lines[4]

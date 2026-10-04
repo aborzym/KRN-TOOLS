@@ -76,14 +76,14 @@ def meter_rest_options(
             MeterRestOption(
                 meter=meter,
                 key="quarter_eighth",
-                label="Grupy jako ćwierćnuta i ósemka",
+                label="Grupy 4ryy 8ryy",
                 groups=groups,
                 split_three_units=True,
             ),
             MeterRestOption(
                 meter=meter,
                 key="dotted",
-                label="Grupy jako ćwierćnuta z kropką",
+                label="Grupy 4.ryy",
                 groups=groups,
             ),
         )
@@ -93,13 +93,13 @@ def meter_rest_options(
             MeterRestOption(
                 meter=meter,
                 key="three_plus_three",
-                label="3+3 — dwie półnuty z kropką",
+                label="Grupy 2.ryy 2.ryy",
                 groups=(3, 3),
             ),
             MeterRestOption(
                 meter=meter,
                 key="two_plus_two_plus_two",
-                label="2+2+2 — trzy półnuty",
+                label="Grupy 2ryy 2ryy 2ryy",
                 groups=(2, 2, 2),
             ),
         )

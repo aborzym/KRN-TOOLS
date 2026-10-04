@@ -1,9 +1,10 @@
 import sys
+from html import escape
 from pathlib import Path
 from time import perf_counter
 
-from PySide6.QtCore import QEvent, QModelIndex, QObject, QRect, Qt, Signal
-from PySide6.QtGui import QCloseEvent, QColor, QPainter, QPen
+from PySide6.QtCore import QEvent, QMimeData, QModelIndex, QObject, QRect, Qt, Signal
+from PySide6.QtGui import QCloseEvent, QColor, QKeyEvent, QKeySequence, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QApplication,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from spineworks.draft_save import prepare_save_text, write_verified_text
 from spineworks.humdrum import HumdrumDocument, HumdrumError
-from spineworks.meter_rhythm import meter_rest_options
+from spineworks.meter_rhythm import MeterSignature, meter_rest_options
 from spineworks.spine_rhythm import (
     meter_at_line,
     suggest_merge_fill,
@@ -48,6 +49,58 @@ from spineworks.spine_validation import (
 )
 from spineworks.status_indicator import StatusIndicator
 from spineworks.theme import SPINEWORKS_STYLE
+
+
+class CopyableTableWidget(QTableWidget):
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self._copy_selection()
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
+
+    def _copy_selection(self) -> None:
+        indexes = self.selectedIndexes()
+        if not indexes:
+            return
+
+        selected = {(index.row(), index.column()) for index in indexes}
+        first_row = min(row for row, _ in selected)
+        last_row = max(row for row, _ in selected)
+        first_column = min(column for _, column in selected)
+        last_column = max(column for _, column in selected)
+
+        spacers = getattr(self.itemDelegate(), "spacers", set())
+        columns = [
+            column for column in range(first_column, last_column + 1) if column not in spacers
+        ]
+        if not columns:
+            return
+
+        rows: list[list[str]] = []
+        for row in range(first_row, last_row + 1):
+            values: list[str] = []
+            for column in columns:
+                item = self.item(row, column)
+                text = item.text() if (row, column) in selected and item is not None else ""
+                values.append(text)
+            rows.append(values)
+
+        plain_text = "\n".join(
+            "\t".join(value.replace("\r", "").replace("\n", " ") for value in row) for row in rows
+        )
+        html_rows = "".join(
+            "<tr>"
+            + "".join("<td>" + escape(value).replace("\n", "<br>") + "</td>" for value in row)
+            + "</tr>"
+            for row in rows
+        )
+
+        mime = QMimeData()
+        mime.setText(plain_text)
+        mime.setHtml(f"<html><body><table>{html_rows}</table></body></html>")
+        QApplication.clipboard().setMimeData(mime)
 
 
 class SpacerHeader(QHeaderView):
@@ -227,6 +280,25 @@ class SpineEditor(QDialog):
         title_row = QHBoxLayout()
         title_row.addWidget(self.title_label)
         title_row.addStretch(1)
+        self.grouping_button = QPushButton("Zmień grupowanie…", self)
+        self.grouping_button.setToolTip("Zmień podział pauz dla kolejnych napraw w tym dokumencie.")
+        self.grouping_button.clicked.connect(self._change_rest_grouping)
+        self.grouping_button.setStyleSheet(
+            """
+            QPushButton {
+                background: transparent;
+                color: #a9bdb0;
+                border: 0;
+                padding: 3px 6px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                color: #e7f4eb;
+                background: #294333;
+            }
+            """
+        )
+        title_row.addWidget(self.grouping_button)
         self.status_indicator = StatusIndicator(self)
         title_row.addWidget(self.status_indicator)
 
@@ -259,7 +331,10 @@ class SpineEditor(QDialog):
         title_row.addWidget(self.help_button)
         layout.addLayout(title_row)
 
-        self.table = QTableWidget(self)
+        self.table = CopyableTableWidget(self)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+
         self.table.setEditTriggers(
             QTableWidget.EditTrigger.CurrentChanged
             | QTableWidget.EditTrigger.SelectedClicked
@@ -312,6 +387,7 @@ class SpineEditor(QDialog):
         self._problems = problems
         self._problem_index = 0
         self._drafts: dict[int, FragmentDraft] = {}
+        self._rest_grouping_choices: dict[tuple[int, int], str] = {}
         self._range_states: dict[int, ValidationState] = {}
 
         self.problem = problems[0]
@@ -711,9 +787,9 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             elif text.startswith("!"):
                 color = "#a17c56" if muted else "#dfa060"
             elif text in {"*^", "*v"}:
-                color = "#a4788d" if muted else "#d69ab7"
+                color = "#bf7892" if muted else "#ff83ad"
             elif text.startswith("*"):
-                color = "#7e6d8c" if muted else "#a98bbf"
+                color = "#887db5" if muted else "#a995f0"
             elif muted:
                 color = "#87978c"
             else:
@@ -1083,6 +1159,63 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
 
         return None
 
+    def _change_rest_grouping(self) -> None:
+        self.grouping_button.setFocus()
+        meter_keys = sorted(self._rest_grouping_choices)
+
+        if not meter_keys:
+            self.report.setPlainText(
+                "Nie wybrano jeszcze grupowania pauz. "
+                "Program zapyta o nie przy pierwszej naprawie wymagającej wyboru."
+            )
+            return
+
+        if len(meter_keys) == 1:
+            meter_key = meter_keys[0]
+        else:
+            meter_labels = [f"{numerator}/{denominator}" for numerator, denominator in meter_keys]
+            label, accepted = QInputDialog.getItem(
+                self,
+                "Zmień grupowanie",
+                "Wybierz metrum:",
+                meter_labels,
+                0,
+                False,
+            )
+            if not accepted:
+                return
+            meter_key = meter_keys[meter_labels.index(label)]
+
+        numerator, denominator = meter_key
+        meter = MeterSignature(
+            numerator=numerator,
+            denominator=denominator,
+        )
+        options = meter_rest_options(meter)
+        labels = [option.label for option in options]
+        current_key = self._rest_grouping_choices[meter_key]
+        current_index = next(
+            (index for index, option in enumerate(options) if option.key == current_key),
+            0,
+        )
+
+        label, accepted = QInputDialog.getItem(
+            self,
+            "Zmień grupowanie",
+            (
+                f"{numerator}/{denominator}\n"
+                "Nowy wybór obowiązuje przy kolejnych naprawach.\n"
+                "Istniejące propozycje pozostają bez zmian:"
+            ),
+            labels,
+            current_index,
+            False,
+        )
+        if not accepted:
+            return
+
+        self._rest_grouping_choices[meter_key] = options[labels.index(label)].key
+
     def _apply_repair_operation(
         self,
         operation: str,
@@ -1128,26 +1261,38 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
         if identity.spine_type == "**kern":
             meter = meter_at_line(candidate, current_line, root_column)
             options = meter_rest_options(meter)
+            meter_key = (meter.numerator, meter.denominator)
+            saved_key = self._rest_grouping_choices.get(meter_key)
 
             if len(options) == 1:
                 rest_option = options[0]
             else:
-                labels = [option.label for option in options]
-                label, accepted = QInputDialog.getItem(
-                    self,
-                    "Podział pauz",
-                    (
-                        f"{identity.instrument or 'Bez nazwy'} — "
-                        f"{meter.numerator}/{meter.denominator}\n"
-                        "Wybierz sposób podziału ukrytych pauz:"
-                    ),
-                    labels,
-                    0,
-                    False,
+                rest_option = next(
+                    (option for option in options if option.key == saved_key),
+                    None,
                 )
-                if not accepted:
-                    return False
-                rest_option = options[labels.index(label)]
+
+                if rest_option is None:
+                    labels = [option.label for option in options]
+                    label, accepted = QInputDialog.getItem(
+                        self,
+                        "Podział pauz",
+                        (
+                            f"{meter.numerator}/{meter.denominator}\n"
+                            "Wybierz sposób podziału ukrytych pauz.\n"
+                            "Wybór obowiązuje dla tego metrum w całym dokumencie:"
+                        ),
+                        labels,
+                        0,
+                        False,
+                    )
+                    if not accepted:
+                        return False
+
+                    rest_option = options[labels.index(label)]
+                    self._rest_grouping_choices[meter_key] = rest_option.key
+
+        timing_start = perf_counter()
 
         timing_start = perf_counter()
         if operation == "join" and identity.spine_type != "**kern":
@@ -1628,9 +1773,9 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
         elif text.startswith("!"):
             color = "#dfa060"
         elif text in {"*^", "*v"}:
-            color = "#d69ab7"
+            color = "#ff83ad"
         elif text.startswith("*"):
-            color = "#a98bbf"
+            color = "#a995f0"
         else:
             color = "#dce7f5"
 
@@ -1695,6 +1840,51 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             event.ignore()
 
     def _save_changes(self) -> None:
+        self.save_button.setFocus()
+        if self._file_path is None:
+            self.report.setPlainText("Nie podano ścieżki pliku do zapisu.")
+            return
+
+        ranges = tuple(
+            (
+                draft,
+                self._problems[index].start_line,
+                self._problems[index].end_line,
+            )
+            for index, draft in sorted(self._drafts.items())
+            if draft.dirty
+        )
+        if not ranges:
+            return
+
+        try:
+            text = prepare_save_text(self._source_document, ranges)
+            document = HumdrumDocument.from_text(text)
+            trace = trace_spines(document)
+            if trace.issue is not None:
+                raise HumdrumError(trace.issue.message)
+
+            issues = find_split_issues(trace)
+            problems = group_split_issues(trace, issues)
+
+            write_verified_text(
+                self._file_path,
+                expected_text=self._source_document.to_text(),
+                new_text=text,
+            )
+        except (OSError, UnicodeError, ValueError, HumdrumError) as error:
+            self.report.setPlainText(str(error))
+            return
+
+        self._source_document = document
+        self._source_trace = trace
+        self._source_issues = issues
+        self._problems = problems
+        self._drafts.clear()
+        self._range_states.clear()
+
+        self.accept()
+
         self.save_button.setFocus()
         if self._file_path is None:
             self.report.setPlainText("Nie podano ścieżki pliku do zapisu.")
