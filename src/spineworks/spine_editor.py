@@ -1426,6 +1426,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 current_line,
                 root_column,
                 rest_option=rest_option,
+                cache=self.draft._rhythm_cache,
             )
         print(
             f"Obliczenie propozycji: {perf_counter() - timing_start:.3f} s",
