@@ -765,7 +765,7 @@ def test_right_aligns_dynamics_in_selected_measure_and_kern() -> None:
         "=2\t=2\t=2\t=2",
         "!\t!LO:DY:rj\t!\t!LO:DY:Y=20",
         "4d\tf\t4f\tmf",
-        "!\t!LO:DY:rj:a:B\t!\t!",
+        "!\t!LO:DY:a:B:rj\t!\t!",
         "4e\tsfz\t4g\t>",
         "!\t!LO:DY:rj\t!\t!",
         "4f\tpp\t4a\t.",

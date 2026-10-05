@@ -193,11 +193,16 @@ def repair_hidden_ties(
             index += 1
 
             if directions == {"in", "out"} and "_" in note:
-                return note.replace("_", "", 1)
-            if "out" in directions:
-                note = _remove_link(note, outgoing=True)
-            if "in" in directions:
-                note = _remove_link(note, outgoing=False)
+                note = note.replace("_", "", 1)
+            else:
+                if "out" in directions:
+                    note = _remove_link(note, outgoing=True)
+                if "in" in directions:
+                    note = _remove_link(note, outgoing=False)
+
+            if "yy" not in note:
+                note += "yy"
+
             return note
 
         fields[column] = re.sub(r"\S+", replace_note, fields[column])

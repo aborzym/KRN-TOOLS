@@ -1156,8 +1156,7 @@ class HumdrumDocument:
                 if (
                     spine_type == "**dynam"
                     and selected_dynamic
-                    and fields[column] not in {"", "."}
-                    and not fields[column].startswith(("<", ">", "(", ")", "[", "]"))
+                    and any(marker in fields[column].lower() for marker in ("p", "f", "s"))
                 )
             ]
 
@@ -1179,11 +1178,7 @@ class HumdrumDocument:
                     existing_layout_found = True
                     parameters = comment.split(":")[2:]
                     if "rj" not in parameters:
-                        comment_fields[column] = comment.replace(
-                            "!LO:DY",
-                            "!LO:DY:rj",
-                            1,
-                        )
+                        comment_fields[column] = f"{comment}:rj"
                         changed_count += 1
                     break
 

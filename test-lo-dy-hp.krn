@@ -1,0 +1,69 @@
+!!!OTL: Test LO:DY, LO:HP i rj
+**kern	**dynam
+*staff1	*staff1
+*M4/4	*
+*clefG2	*
+!! Test 1
+=1	=1
+!	!LO:HP:a
+4c	<
+4d	.
+!	!LO:HP:a
+4e	>
+4f	.
+!! Test 2
+=2	=2
+!	!LO:DY:a
+4c	p <
+4d	.
+!	!LO:DY:a
+4e	f >
+4f	.
+!! Test 3
+=3	=3
+!	!
+!	!LO:HP:a:color=blue
+!LO:TX:t=komentarz	!
+!	!LO:TX:t=test
+4c	<
+4d	.
+!	!
+!	!LO:HP:a:color=blue
+!LO:TX:t=komentarz	!
+!	!LO:TX:t=test
+4e	>
+4f	.
+!! Test 4
+=4	=4
+!	!LO:DY:a
+4c	p
+4d	.
+!	!LO:DY:a:rj
+4e	sfz
+4f	.
+!! Test 5
+=5	=5
+!	!LO:DY:a:Y=12
+!LO:TX:t=komentarz	!
+!	!LO:TX:t=test
+4c	pp <
+4d	.
+!	!LO:DY:a:Y=12
+!LO:TX:t=komentarz	!
+!	!LO:TX:t=test
+4e	ff >
+4f	.
+!! Test 6
+=6	=6
+!	!LO:HP:a
+!LO:TX:t=komentarz	!
+!	!LO:TX:t=test
+4c	<
+4d	.
+!	!LO:HP:a
+!LO:TX:t=komentarz	!
+!	!LO:TX:t=test
+4e	>
+4f	.
+==	==
+*-	*-

@@ -2,6 +2,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import ClassVar
@@ -63,6 +64,7 @@ from spineworks.filters import (
     run_addic,
     run_barnum,
 )
+from spineworks.hairpin_layouts import repair_hairpin_layouts
 from spineworks.hidden_ties import repair_hidden_ties
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.spine_editor import SpineEditor
@@ -255,11 +257,23 @@ class MainWindow(QMainWindow):
         self.save_as_action.triggered.connect(self.save_as_file)
         toolbar.addAction(self.save_as_action)
 
+        self.reload_action = QAction("Odśwież", self)
+        self.reload_action.setEnabled(False)
+        self.reload_action.setToolTip("Ponownie wczytaj bieżący plik z dysku.")
+        self.reload_action.triggered.connect(self.reload_file)
+        toolbar.addAction(self.reload_action)
+
         self.undo_action = QAction("Cofnij", self)
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.setEnabled(False)
         self.undo_action.triggered.connect(self.undo)
         toolbar.addAction(self.undo_action)
+
+        self.close_file_action = QAction("Zamknij plik", self)
+        self.close_file_action.setShortcut(QKeySequence.StandardKey.Close)
+        self.close_file_action.setEnabled(False)
+        self.close_file_action.triggered.connect(self.close_file)
+        toolbar.addAction(self.close_file_action)
 
         toolbar.addSeparator()
 
@@ -479,6 +493,15 @@ class MainWindow(QMainWindow):
         )
         layout.addLayout(operations)
 
+        self.hairpin_layout_button = QPushButton("LO:DY → LO:HP")
+        self.hairpin_layout_button.setObjectName("primaryButton")
+        self.hairpin_layout_button.setEnabled(False)
+        self.hairpin_layout_button.setToolTip(
+            "Zamień LO:DY na LO:HP przy tokenach zawierających < lub > "
+            "bez p/f. Pomiń przypadki z istniejącym LO:HP."
+        )
+        self.hairpin_layout_button.clicked.connect(self.apply_hairpin_layout_repair)
+
         cleanup_row = QHBoxLayout()
         cleanup_row.setSpacing(12)
         cleanup_row.addStretch()
@@ -487,7 +510,11 @@ class MainWindow(QMainWindow):
         self.propagate_button.setToolTip("Uzupełnij i popraw przypisania part i staff do spine’ów.")
         self.hidden_ties_button.setText("Popraw ukryte ligatury")
 
-        for button in (self.propagate_button, self.hidden_ties_button):
+        for button in (
+            self.propagate_button,
+            self.hidden_ties_button,
+            self.hairpin_layout_button,
+        ):
             button.setFixedWidth(220)
             button.setSizePolicy(
                 QSizePolicy.Policy.Fixed,
@@ -610,6 +637,19 @@ class MainWindow(QMainWindow):
             action.setToolTip(str(path))
             action.triggered.connect(lambda checked=False, selected=path: self.load_path(selected))
 
+    def _update_file_label(self) -> None:
+        if self.current_path is None:
+            return
+
+        path = self.current_path
+        try:
+            modified = datetime.fromtimestamp(path.stat().st_mtime)
+        except OSError:
+            self.file_label.setText(path.name)
+            return
+
+        self.file_label.setText(f"{path.name} · Ostatnia zmiana: {modified:%d.%m.%Y %H:%M:%S}")
+
     def open_file(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
             self, "Otwórz plik Humdrum", "", "Pliki Humdrum (*.krn);;Wszystkie pliki (*)"
@@ -617,8 +657,95 @@ class MainWindow(QMainWindow):
         if filename:
             self.load_path(Path(filename))
 
-    def load_path(self, path: Path) -> None:
-        if self.document is not None and not self._confirm_unsaved_changes():
+    def close_file(self) -> None:
+        if self.document is None:
+            return
+        if not self._confirm_unsaved_changes():
+            return
+
+        self.document = None
+        self.current_path = None
+        self.saved_text = None
+        self.field_edits_dirty = False
+        self.undo_texts.clear()
+        self.enabled_edit_rows.clear()
+        self.editable_row_indexes.clear()
+        self.row_inputs.clear()
+        self.show_group_row = False
+
+        self.table.clear()
+        self.table.setRowCount(0)
+        self.table.setColumnCount(0)
+
+        self.system_decoration_input.blockSignals(True)
+        try:
+            self.system_decoration_input.clear()
+        finally:
+            self.system_decoration_input.blockSignals(False)
+
+        for control in (
+            self.save_action,
+            self.save_as_action,
+            self.reload_action,
+            self.undo_action,
+            self.close_file_action,
+            self.system_decoration_input,
+            self.addic_button,
+            self.ig_button,
+            self.barnum_button,
+            self.empty_spine_button,
+            self.kern_spine_button,
+            self.segment_button,
+            self.italics_button,
+            self.custos_button,
+            self.hide_range_button,
+            self.right_align_dynamics_button,
+            self.color_elements_button,
+            self.compact_records_button,
+            self.breaks_button,
+            self.remove_spine_button,
+            self.spine_editor_button,
+            self.propagate_button,
+            self.hidden_ties_button,
+            self.hairpin_layout_button,
+        ):
+            control.setEnabled(False)
+
+        self._sync_ig_button()
+        self.file_label.setText("Upuść tutaj plik .krn albo wybierz „Otwórz”.")
+        self.setWindowTitle("SPINEWORKS")
+        self.statusBar().showMessage("Zamknięto plik")
+
+    def reload_file(self) -> None:
+        if self.document is None or self.current_path is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        if self.document.to_text() != self.saved_text:
+            box = QMessageBox(self)
+            box.setWindowTitle("Odświeżenie pliku")
+            box.setIcon(QMessageBox.Icon.Warning)
+            box.setText("Dokument zawiera niezapisane zmiany.")
+            box.setInformativeText("Odświeżenie odrzuci te zmiany i ponownie wczyta plik z dysku.")
+            reload_button = box.addButton(
+                "Odrzuć zmiany i odśwież",
+                QMessageBox.ButtonRole.DestructiveRole,
+            )
+            cancel_button = box.addButton(
+                "Anuluj",
+                QMessageBox.ButtonRole.RejectRole,
+            )
+            box.setDefaultButton(cancel_button)
+            box.exec()
+
+            if box.clickedButton() is not reload_button:
+                return
+
+        self.load_path(self.current_path, confirm_unsaved=False)
+
+    def load_path(self, path: Path, *, confirm_unsaved: bool = True) -> None:
+        if confirm_unsaved and self.document is not None and not self._confirm_unsaved_changes():
             return
         try:
             document = HumdrumDocument.from_path(path)
@@ -632,6 +759,8 @@ class MainWindow(QMainWindow):
         self.undo_texts.clear()
         self.enabled_edit_rows.clear()
         self.undo_action.setEnabled(False)
+        self.reload_action.setEnabled(True)
+        self.close_file_action.setEnabled(True)
         self.save_action.setEnabled(True)
         self.save_as_action.setEnabled(True)
         self.system_decoration_input.setEnabled(True)
@@ -656,11 +785,12 @@ class MainWindow(QMainWindow):
             any(spine_type == "**kern" for spine_type in document.spine_types)
         )
         self.compact_records_button.setEnabled(True)
+        self.hairpin_layout_button.setEnabled("**dynam" in document.spine_types)
         self.spine_editor_button.setEnabled(True)
         self.remove_spine_button.setEnabled(document.spine_count > 1)
         self.show_group_row = document.header.instrument_group_line is not None
         self._sync_ig_button()
-        self.file_label.setText(path.name)
+        self._update_file_label()
         self._refresh_table()
         self.table.verticalHeader().setVisible(True)
         self._remember_recent_file(path)
@@ -725,6 +855,7 @@ class MainWindow(QMainWindow):
 
         self.document = document
         self.saved_text = text
+        self._update_file_label()
         self._refresh_table()
         self._update_window_title()
         self.statusBar().showMessage(f"Zapisano {self.current_path.name}")
@@ -760,7 +891,7 @@ class MainWindow(QMainWindow):
         self.document = document
         self.current_path = path
         self.saved_text = text
-        self.file_label.setText(path.name)
+        self._update_file_label()
         self._refresh_table()
         self._update_window_title()
         self._remember_recent_file(path)
@@ -1022,6 +1153,35 @@ class MainWindow(QMainWindow):
                 "Nie udało się otworzyć GitHuba. Raport został skopiowany do schowka.",
             )
 
+    def apply_hairpin_layout_repair(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        before = self.document.to_text()
+        try:
+            document, count = repair_hairpin_layouts(self.document)
+        except HumdrumError as error:
+            QMessageBox.warning(
+                self,
+                "Nie można poprawić oznaczeń widełek",
+                str(error),
+            )
+            return
+
+        if count:
+            self.undo_texts.append(before)
+            self.document = document
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self._update_window_title()
+            message = f"Zamieniono LO:DY na LO:HP: {count}"
+        else:
+            message = "Nie znaleziono oznaczeń LO:DY wymagających zamiany."
+
+        self.statusBar().showMessage(message)
+
     def apply_hidden_tie_repair(self) -> None:
         if self.document is None:
             return
@@ -1118,6 +1278,9 @@ class MainWindow(QMainWindow):
         end_input.setRange(0, 999_999)
         end_input.setValue(1)
         form.addRow("Do taktu:", end_input)
+
+        start_input.valueChanged.connect(end_input.setMinimum)
+        end_input.setMinimum(start_input.value())
 
         duplicate_checkbox = QCheckBox(
             "Zamień istniejące yy na yyyy",
@@ -1292,7 +1455,7 @@ class MainWindow(QMainWindow):
         form = QFormLayout(dialog)
 
         all_measures_checkbox = QCheckBox("Wszystkie takty", dialog)
-        all_measures_checkbox.setChecked(True)
+        all_measures_checkbox.setChecked(False)
         form.addRow(all_measures_checkbox)
 
         measure_input_width = 150
@@ -1321,7 +1484,7 @@ class MainWindow(QMainWindow):
         form.addRow("Do taktu:", end_measure_widget)
 
         all_spines_checkbox = QCheckBox("Wszystkie spiny", dialog)
-        all_spines_checkbox.setChecked(True)
+        all_spines_checkbox.setChecked(False)
         form.addRow(all_spines_checkbox)
 
         start_spine_combo = QComboBox(dialog)
@@ -1331,7 +1494,8 @@ class MainWindow(QMainWindow):
             start_spine_combo.addItem(label)
             end_spine_combo.addItem(label)
 
-        end_spine_combo.setCurrentIndex(end_spine_combo.count() - 1)
+        start_spine_combo.setCurrentIndex(0)
+        end_spine_combo.setCurrentIndex(0)
         form.addRow("Od spinu:", start_spine_combo)
         form.addRow("Do spinu:", end_spine_combo)
 
@@ -1346,11 +1510,24 @@ class MainWindow(QMainWindow):
             start_spine_combo.setEnabled(range_enabled)
             end_spine_combo.setEnabled(range_enabled)
 
+        def sync_measure_range() -> None:
+            end_measure_input.setMinimum(start_measure_input.value())
+
+        def sync_spine_range() -> None:
+            start_index = start_spine_combo.currentIndex()
+            if end_spine_combo.currentIndex() < start_index:
+                end_spine_combo.setCurrentIndex(start_index)
+
         all_measures_checkbox.toggled.connect(sync_measure_inputs)
         to_end_checkbox.toggled.connect(sync_measure_inputs)
         all_spines_checkbox.toggled.connect(sync_spine_inputs)
+        start_measure_input.valueChanged.connect(sync_measure_range)
+        start_spine_combo.currentIndexChanged.connect(sync_spine_range)
+        end_spine_combo.currentIndexChanged.connect(sync_spine_range)
         sync_measure_inputs()
         sync_spine_inputs()
+        sync_measure_range()
+        sync_spine_range()
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
@@ -1613,11 +1790,24 @@ class MainWindow(QMainWindow):
             start_spine_combo.setEnabled(range_enabled)
             end_spine_combo.setEnabled(range_enabled)
 
+        def sync_measure_range() -> None:
+            end_measure_input.setMinimum(start_measure_input.value())
+
+        def sync_spine_range() -> None:
+            start_index = start_spine_combo.currentIndex()
+            if end_spine_combo.currentIndex() < start_index:
+                end_spine_combo.setCurrentIndex(start_index)
+
         all_measures_checkbox.toggled.connect(sync_measure_inputs)
         to_end_checkbox.toggled.connect(sync_measure_inputs)
         all_spines_checkbox.toggled.connect(sync_spine_inputs)
+        start_measure_input.valueChanged.connect(sync_measure_range)
+        start_spine_combo.currentIndexChanged.connect(sync_spine_range)
+        end_spine_combo.currentIndexChanged.connect(sync_spine_range)
         sync_measure_inputs()
         sync_spine_inputs()
+        sync_measure_range()
+        sync_spine_range()
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,

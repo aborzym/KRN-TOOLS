@@ -489,7 +489,13 @@ class SpineEditor(QDialog):
         self.save_button.setToolTip("Zatwierdź propozycje i zapisz wszystkie poprawione zakresy.")
         self.save_button.clicked.connect(self._save_changes)
 
+        self.exit_button = QPushButton("Wyjdź", self)
+        self.exit_button.setFixedWidth(self.button_width)
+        self.exit_button.setObjectName("primaryButton")
+        self.exit_button.clicked.connect(self.close)
+
         save_row = QHBoxLayout()
+        save_row.addWidget(self.exit_button)
         save_row.addStretch()
         save_row.addWidget(self.save_button)
         layout.addLayout(save_row)
@@ -908,6 +914,34 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             0,
             table.fontMetrics().height() * 2 + 12,
         )
+
+        meter_by_root: dict[int, str] = {}
+        for traced in self._source_trace.records:
+            if traced.record.line_number > start_line:
+                break
+            for token, branch in zip(traced.record.fields, traced.branches):
+                if token.startswith("*M") and token[2:3].isdigit():
+                    meter_by_root[branch.identity.root_column] = token[2:]
+
+        meter_labels = list(
+            dict.fromkeys(
+                meter_by_root.get(identity.root_column, "—")
+                for identity in identities
+                if identity.spine_type == "**kern"
+            )
+        )
+
+        put(0, 0, "Metrum:")
+        put(0, 1, " / ".join(meter_labels) if meter_labels else "—")
+
+        for column in (0, 1):
+            item = table.item(0, column)
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            item.setForeground(QColor("#9ee6b5"))
+            item.setBackground(QColor("#193526"))
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
 
         for identity in identities:
             root = identity.root_column
@@ -2008,86 +2042,6 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
         self._range_states.clear()
 
         self.accept()
-
-        self.save_button.setFocus()
-        if self._file_path is None:
-            self.report.setPlainText("Nie podano ścieżki pliku do zapisu.")
-            return
-
-        ranges = tuple(
-            (
-                draft,
-                self._problems[index].start_line,
-                self._problems[index].end_line,
-            )
-            for index, draft in sorted(self._drafts.items())
-            if draft.dirty
-        )
-        if not ranges:
-            return
-
-        try:
-            text = prepare_save_text(self._source_document, ranges)
-            document = HumdrumDocument.from_text(text)
-            trace = trace_spines(document)
-            if trace.issue is not None:
-                raise HumdrumError(trace.issue.message)
-
-            issues = find_split_issues(trace)
-            problems = group_split_issues(trace, issues)
-
-            write_verified_text(
-                self._file_path,
-                expected_text=self._source_document.to_text(),
-                new_text=text,
-            )
-        except (OSError, UnicodeError, ValueError, HumdrumError) as error:
-            self.report.setPlainText(str(error))
-            return
-
-        self._source_document = document
-        self._source_trace = trace
-        self._source_issues = issues
-        self._problems = problems
-        self._drafts.clear()
-        self._range_states.clear()
-
-        if problems:
-            self._load_problem(0)
-            self.report.appendPlainText(
-                "\nZapisano wszystkie poprawione zakresy. "
-                "Numery linii odpowiadają teraz zapisanemu plikowi."
-            )
-        else:
-            self._editing = False
-            self.table.blockSignals(True)
-            try:
-                self.table.clearSpans()
-                self.table.clear()
-                self.table.setRowCount(0)
-            finally:
-                self.table.blockSignals(False)
-
-            self.table.setEnabled(False)
-            for button in (
-                self.view_button,
-                self.undo_button,
-                self.repair_button,
-                self.approve_button,
-                self.join_button,
-                self.move_split_button,
-                self.move_merge_button,
-                self.previous_button,
-                self.next_button,
-                self.save_button,
-            ):
-                button.setEnabled(False)
-
-            self.status_indicator.set_state(ValidationState.VALID)
-            self.title_label.setText("Wszystkie rozdwojenia poprawione.")
-            self.report.setPlainText(
-                "Zapisano wszystkie zmiany. Nie wykryto kolejnych problemów rozdwojenia spinów."
-            )
 
     def _update_validation(self, result=None) -> None:
         if result is None:
