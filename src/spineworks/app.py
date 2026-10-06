@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import ClassVar
@@ -379,7 +379,7 @@ class MainWindow(QMainWindow):
         self.custos_button.setEnabled(False)
         self.custos_button.clicked.connect(self.apply_custos)
 
-        self.hide_range_button = QPushButton("Ukryj zakres")
+        self.hide_range_button = QPushButton("Ukryj / odkryj")
         self.hide_range_button.setObjectName("primaryButton")
         self.hide_range_button.setEnabled(False)
         self.hide_range_button.clicked.connect(self.apply_hidden_measure_range)
@@ -643,7 +643,7 @@ class MainWindow(QMainWindow):
 
         path = self.current_path
         try:
-            modified = datetime.fromtimestamp(path.stat().st_mtime)
+            modified = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).astimezone()
         except OSError:
             self.file_label.setText(path.name)
             return
@@ -1260,14 +1260,26 @@ class MainWindow(QMainWindow):
 
     def _ask_hidden_measure_range(
         self,
-    ) -> tuple[int, int, set[int], bool] | None:
+    ) -> tuple[int, int, set[int], bool, bool, str] | None:
         if self.document is None:
             return None
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Ukryj zakres")
+        dialog.setWindowTitle("Ukryj / odkryj zakres")
         dialog.setMinimumWidth(560)
         form = QFormLayout(dialog)
+
+        mode_widget = QWidget(dialog)
+        mode_layout = QHBoxLayout(mode_widget)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+
+        hide_radio = QRadioButton("Ukryj", mode_widget)
+        reveal_radio = QRadioButton("Odkryj", mode_widget)
+        hide_radio.setChecked(True)
+        mode_layout.addWidget(hide_radio)
+        mode_layout.addWidget(reveal_radio)
+        mode_layout.addStretch()
+        form.addRow("Operacja:", mode_widget)
 
         start_input = QSpinBox(dialog)
         start_input.setRange(0, 999_999)
@@ -1288,6 +1300,22 @@ class MainWindow(QMainWindow):
         )
         duplicate_checkbox.setChecked(False)
         form.addRow(duplicate_checkbox)
+
+        reduce_checkbox = QCheckBox("Zamień yyyy na yy", dialog)
+        remove_checkbox = QCheckBox("Usuń yyyy", dialog)
+        form.addRow(reduce_checkbox)
+        form.addRow(remove_checkbox)
+
+        def uncheck_remove(checked: bool) -> None:
+            if checked:
+                remove_checkbox.setChecked(False)
+
+        def uncheck_reduce(checked: bool) -> None:
+            if checked:
+                reduce_checkbox.setChecked(False)
+
+        reduce_checkbox.toggled.connect(uncheck_remove)
+        remove_checkbox.toggled.connect(uncheck_reduce)
 
         spine_widget = QWidget(dialog)
         spine_layout = QVBoxLayout(spine_widget)
@@ -1321,6 +1349,18 @@ class MainWindow(QMainWindow):
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
 
+        def sync_mode() -> None:
+            revealing = reveal_radio.isChecked()
+            duplicate_checkbox.setVisible(not revealing)
+            reduce_checkbox.setVisible(revealing)
+            remove_checkbox.setVisible(revealing)
+            buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
+                "Odkryj" if revealing else "Ukryj"
+            )
+
+        reveal_radio.toggled.connect(sync_mode)
+        sync_mode()
+
         while dialog.exec() == QDialog.DialogCode.Accepted:
             start_measure = start_input.value()
             end_measure = end_input.value()
@@ -1344,11 +1384,19 @@ class MainWindow(QMainWindow):
                 )
                 continue
 
+            double_hidden = "preserve"
+            if reduce_checkbox.isChecked():
+                double_hidden = "reduce"
+            elif remove_checkbox.isChecked():
+                double_hidden = "remove"
+
             return (
                 start_measure,
                 end_measure,
                 selected_columns,
                 duplicate_checkbox.isChecked(),
+                reveal_radio.isChecked(),
+                double_hidden,
             )
 
         return None
@@ -1366,6 +1414,8 @@ class MainWindow(QMainWindow):
             end_measure,
             selected_columns,
             duplicate_existing,
+            reveal,
+            double_hidden,
         ) = choice
         before = self.document.to_text()
 
@@ -1375,10 +1425,12 @@ class MainWindow(QMainWindow):
                 end_measure=end_measure,
                 kern_columns=selected_columns,
                 duplicate_existing=duplicate_existing,
+                reveal=reveal,
+                double_hidden=double_hidden,
             )
         except HumdrumError as error:
             self._show_copyable_error(
-                "Nie można ukryć zakresu",
+                "Nie można zmienić widoczności zakresu",
                 str(error),
             )
             return
@@ -1387,10 +1439,12 @@ class MainWindow(QMainWindow):
             self.undo_texts.append(before)
             self.undo_action.setEnabled(True)
             self._refresh_table()
-            self.statusBar().showMessage(f"Ukryto takty {start_measure}–{end_measure}")
+            self._update_window_title()
+            operation = "Odkryto" if reveal else "Ukryto"
+            self.statusBar().showMessage(f"{operation} takty {start_measure}–{end_measure}")
         else:
             self.statusBar().showMessage(
-                f"Brak danych do ukrycia w taktach {start_measure}–{end_measure}"
+                f"Brak zmian widoczności w taktach {start_measure}–{end_measure}"
             )
 
     def _ask_right_align_dynamics(

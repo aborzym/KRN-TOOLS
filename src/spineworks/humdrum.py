@@ -815,9 +815,13 @@ class HumdrumDocument:
         end_measure: int,
         kern_columns: set[int],
         duplicate_existing: bool = False,
+        reveal: bool = False,
+        double_hidden: str = "preserve",
     ) -> bool:
         if start_measure > end_measure:
             raise HumdrumError("Pierwszy takt zakresu nie może być późniejszy niż ostatni.")
+        if double_hidden not in {"preserve", "reduce", "remove"}:
+            raise HumdrumError("Nieprawidłowy sposób obsługi yyyy.")
 
         initial_types = self.spine_types.copy()
         selected_kerns = {
@@ -852,6 +856,20 @@ class HumdrumDocument:
                 hidden = bool(related_kerns) and related_kerns <= selected_kerns
 
             active_spines.append((spine_type, hidden))
+
+        def reveal_token(token: str) -> str:
+            def replace_hidden(match: re.Match[str]) -> str:
+                marker = match.group()
+                if marker == "yy":
+                    return ""
+                if marker == "yyyy":
+                    if double_hidden == "reduce":
+                        return "yy"
+                    if double_hidden == "remove":
+                        return ""
+                return marker
+
+            return re.sub(r"y{2,}", replace_hidden, token)
 
         current_measure: int | None = None
         updates: dict[int, list[str]] = {}
@@ -963,7 +981,10 @@ class HumdrumDocument:
                 if not token or token == ".":
                     continue
 
-                if spine_type == "**kern":
+                if reveal and spine_type in {"**kern", "**dynam"}:
+                    changed_token = reveal_token(token)
+
+                elif spine_type == "**kern":
                     changed_token = self._hide_kern_token(
                         token,
                         duplicate_existing=duplicate_existing,

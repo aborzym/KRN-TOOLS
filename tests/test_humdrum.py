@@ -1159,3 +1159,70 @@ def test_sorts_header_rows_and_preserves_other_records() -> None:
     assert document.header.instrument_name_line == 8
     assert document.header.instrument_abbr_line == 9
     assert document.sort_header_rows() is False
+
+
+def test_reveal_measure_range_preserves_double_hidden_and_range():
+    source = (
+        "**kern\t**dynam\t**kern\n"
+        "*staff1\t*staff1\t*staff2\n"
+        "=1\t=1\t=1\n"
+        "4cyy 4eyyyy\tpyy\t4gyy\n"
+        "=2\t=2\t=2\n"
+        "4ryy\t<yy\t4ryy\n"
+        "=3\t=3\t=3\n"
+        "4dyy\tfyy\t4ayy\n"
+        "*-\t*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    changed = document.hide_measure_range(
+        start_measure=1,
+        end_measure=2,
+        kern_columns={0},
+        reveal=True,
+    )
+
+    assert changed
+    assert document.to_text() == (
+        "**kern\t**dynam\t**kern\n"
+        "*staff1\t*staff1\t*staff2\n"
+        "=1\t=1\t=1\n"
+        "4c 4eyyyy\tp\t4gyy\n"
+        "=2\t=2\t=2\n"
+        "4r\t<\t4ryy\n"
+        "=3\t=3\t=3\n"
+        "4dyy\tfyy\t4ayy\n"
+        "*-\t*-\t*-\n"
+    )
+    assert not document.hide_measure_range(
+        start_measure=1,
+        end_measure=2,
+        kern_columns={0},
+        reveal=True,
+    )
+
+
+def test_reveal_measure_range_reduces_double_hidden_once():
+    document = HumdrumDocument.from_text("**kern\n=1\n4cyyyy 4eyy\n4ryyyy\n*-\n")
+
+    assert document.hide_measure_range(
+        start_measure=1,
+        end_measure=1,
+        kern_columns={0},
+        reveal=True,
+        double_hidden="reduce",
+    )
+    assert document.to_text() == "**kern\n=1\n4cyy 4e\n4ryy\n*-\n"
+
+
+def test_reveal_measure_range_removes_double_hidden():
+    document = HumdrumDocument.from_text("**kern\n=1\n4cyyyy 4eyy\n4ryyyy\n*-\n")
+
+    assert document.hide_measure_range(
+        start_measure=1,
+        end_measure=1,
+        kern_columns={0},
+        reveal=True,
+        double_hidden="remove",
+    )
+    assert document.to_text() == "**kern\n=1\n4c 4e\n4r\n*-\n"
