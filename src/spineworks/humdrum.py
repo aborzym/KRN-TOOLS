@@ -899,6 +899,30 @@ class HumdrumDocument:
                 continue
 
             if line.startswith("*"):
+                if current_measure is not None and start_measure <= current_measure <= end_measure:
+                    changed_fields = fields.copy()
+
+                    for column, (spine_type, selected) in enumerate(active_spines):
+                        if spine_type != "**kern" or not selected:
+                            continue
+
+                        token = fields[column]
+                        if re.fullmatch(r"\*rep(?:yy)*", token) is None:
+                            continue
+
+                        if reveal:
+                            changed_token = reveal_token(token)
+                        else:
+                            changed_token = self._apply_yy_suffix(
+                                token,
+                                duplicate_existing=duplicate_existing,
+                            )
+
+                        changed_fields[column] = changed_token
+
+                    if changed_fields != fields:
+                        updates[line_number] = changed_fields
+
                 if any(token in {"*x", "*+"} for token in fields):
                     bad_token = next(token for token in fields if token in {"*x", "*+"})
                     raise HumdrumError(

@@ -1226,3 +1226,123 @@ def test_reveal_measure_range_removes_double_hidden():
         double_hidden="remove",
     )
     assert document.to_text() == "**kern\n=1\n4c 4e\n4r\n*-\n"
+
+
+def test_hide_and_reveal_rep_in_selected_range():
+    source = (
+        "**kern\t**kern\n"
+        "=1\t=1\n"
+        "*rep\t*rep\n"
+        "4c\t4e\n"
+        "=2\t=2\n"
+        "*rep\t*rep\n"
+        "4d\t4f\n"
+        "*Xrep\t*Xrep\n"
+        "=3\t=3\n"
+        "*rep\t*rep\n"
+        "4e\t4g\n"
+        "*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    assert document.hide_measure_range(
+        start_measure=2,
+        end_measure=2,
+        kern_columns={0},
+    )
+    assert document.to_text() == source.replace(
+        "=2\t=2\n*rep\t*rep\n4d\t4f",
+        "=2\t=2\n*repyy\t*rep\n4dyy\t4f",
+    )
+
+    assert document.hide_measure_range(
+        start_measure=2,
+        end_measure=2,
+        kern_columns={0},
+        reveal=True,
+    )
+    assert document.to_text() == source
+
+
+def test_rep_double_hidden_options():
+    document = HumdrumDocument.from_text("**kern\n=1\n*repyy\n4c\n*Xrep\n*-\n")
+
+    assert document.hide_measure_range(
+        start_measure=1,
+        end_measure=1,
+        kern_columns={0},
+        duplicate_existing=True,
+    )
+    assert "*repyyyy\n" in document.to_text()
+    assert "*Xrep\n" in document.to_text()
+
+    assert document.hide_measure_range(
+        start_measure=1,
+        end_measure=1,
+        kern_columns={0},
+        reveal=True,
+    )
+    assert "*repyyyy\n" in document.to_text()
+
+    assert document.hide_measure_range(
+        start_measure=1,
+        end_measure=1,
+        kern_columns={0},
+        reveal=True,
+        double_hidden="reduce",
+    )
+    assert "*repyy\n" in document.to_text()
+
+    assert document.hide_measure_range(
+        start_measure=1,
+        end_measure=1,
+        kern_columns={0},
+        reveal=True,
+        double_hidden="remove",
+    )
+    assert "*rep\n" in document.to_text()
+    assert "*Xrep\n" in document.to_text()
+
+
+def test_coloring_includes_both_range_boundaries_only() -> None:
+    source = (
+        "**kern\t**dynam\t**kern\n"
+        "*staff1\t*staff1\t*staff2\n"
+        "=1\t=1\t=1\n"
+        "4c#\tp\t4g#\n"
+        "=2\t=2\t=2\n"
+        "4d#\tf\t4a#\n"
+        "=3\t=3\t=3\n"
+        "4e-\t<\t4b-\n"
+        "=4\t=4\t=4\n"
+        "4f#\t>\t4cc#\n"
+        "*-\t*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    assert (
+        document.color_notation_elements(
+            start_measure=2,
+            end_measure=3,
+            kern_columns={0},
+            color="blue",
+            elements={"accidentals", "dynamics", "hairpins"},
+        )
+        == 4
+    )
+
+    assert document.to_text() == (
+        "**kern\t**dynam\t**kern\n"
+        "*staff1\t*staff1\t*staff2\n"
+        "=1\t=1\t=1\n"
+        "4c#\tp\t4g#\n"
+        "=2\t=2\t=2\n"
+        "!LO:ACC:color=blue\t!LO:DY:color=blue\t!\n"
+        "4d#\tf\t4a#\n"
+        "=3\t=3\t=3\n"
+        "!LO:ACC:color=blue\t!LO:HP:color=blue\t!\n"
+        "4e-\t<\t4b-\n"
+        "=4\t=4\t=4\n"
+        "4f#\t>\t4cc#\n"
+        "*-\t*-\t*-\n"
+    )

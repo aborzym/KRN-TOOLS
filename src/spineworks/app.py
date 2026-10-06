@@ -1321,15 +1321,37 @@ class MainWindow(QMainWindow):
         spine_layout = QVBoxLayout(spine_widget)
         spine_layout.setContentsMargins(0, 0, 0, 0)
 
+        all_spines_checkbox = QCheckBox("Zaznacz wszystkie", spine_widget)
+        spine_layout.addWidget(all_spines_checkbox)
+
         descriptions = self._spine_descriptions()
         spine_checkboxes: list[tuple[int, QCheckBox]] = []
-        for column, spine_type in enumerate(self.document.spine_types):
-            if spine_type != "**kern":
+
+        for column in reversed(range(len(self.document.spine_types))):
+            if self.document.spine_types[column] != "**kern":
                 continue
 
             checkbox = QCheckBox(descriptions[column], spine_widget)
             spine_layout.addWidget(checkbox)
             spine_checkboxes.append((column, checkbox))
+
+        def select_all_spines(checked: bool) -> None:
+            for _, checkbox in spine_checkboxes:
+                checkbox.blockSignals(True)
+                checkbox.setChecked(checked)
+                checkbox.blockSignals(False)
+
+        def sync_all_spines() -> None:
+            all_selected = bool(spine_checkboxes) and all(
+                checkbox.isChecked() for _, checkbox in spine_checkboxes
+            )
+            all_spines_checkbox.blockSignals(True)
+            all_spines_checkbox.setChecked(all_selected)
+            all_spines_checkbox.blockSignals(False)
+
+        all_spines_checkbox.toggled.connect(select_all_spines)
+        for _, checkbox in spine_checkboxes:
+            checkbox.toggled.connect(sync_all_spines)
 
         spine_layout.addStretch(1)
 
