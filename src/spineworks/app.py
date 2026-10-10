@@ -258,6 +258,7 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.save_as_action)
 
         self.reload_action = QAction("Odśwież", self)
+        self.reload_action.setShortcut(QKeySequence("Ctrl+R"))
         self.reload_action.setEnabled(False)
         self.reload_action.setToolTip("Ponownie wczytaj bieżący plik z dysku.")
         self.reload_action.triggered.connect(self.reload_file)

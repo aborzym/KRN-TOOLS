@@ -1346,3 +1346,22 @@ def test_coloring_includes_both_range_boundaries_only() -> None:
         "4f#\t>\t4cc#\n"
         "*-\t*-\t*-\n"
     )
+
+
+@pytest.mark.parametrize(
+    "comment",
+    [
+        "!LO:TX:t=P:problem=custos jako łamanie pięciolinii",
+        "!LO:TX:t=P:problem=custos: jako lamanie pieciolinii",
+        "!LO:SIC:custos:G jako łamanie pięciolinii",
+        "!LO:SIC:custos G jako LAMANIE pieciolinii",
+        "!LO:SIC:custos:G dowolny opis",
+        "!LO:SIC:custos G dowolny opis:v",
+    ],
+)
+def test_preserves_descriptive_custos_comments(comment: str) -> None:
+    source = f"**kern\n*staff1\n{comment}\n4c\n=2\n4d\n*-\n"
+    document = HumdrumDocument.from_text(source)
+
+    assert document.correct_custos() is False
+    assert document.to_text() == source

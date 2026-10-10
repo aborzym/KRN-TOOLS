@@ -588,9 +588,17 @@ class HumdrumDocument:
                     continue
 
                 token = fields[column]
+                if any(word in token.casefold() for word in ("łamanie", "lamanie")):
+                    continue
+
                 match = marker_pattern.search(token)
                 if match is not None:
+                    after_pitch = token[match.end() :]
+                    if after_pitch.strip() and not after_pitch.startswith(":"):
+                        continue
+
                     column_markers.append((line_number, match.group(1)))
+
                 elif marker_name_pattern.search(token):
                     errors.append(
                         "Brak dźwięku w oznaczeniu custos — "
