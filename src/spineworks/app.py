@@ -503,6 +503,14 @@ class MainWindow(QMainWindow):
         )
         self.hairpin_layout_button.clicked.connect(self.apply_hairpin_layout_repair)
 
+        self.replace_range_button = QPushButton("Zamień")
+        self.replace_range_button.setObjectName("primaryButton")
+        self.replace_range_button.setEnabled(False)
+        self.replace_range_button.setToolTip(
+            "Zamień tekst w tokenach danych wybranych taktów i spinów."
+        )
+        self.replace_range_button.clicked.connect(self.apply_replace_range)
+
         cleanup_row = QHBoxLayout()
         cleanup_row.setSpacing(12)
         cleanup_row.addStretch()
@@ -515,6 +523,7 @@ class MainWindow(QMainWindow):
             self.propagate_button,
             self.hidden_ties_button,
             self.hairpin_layout_button,
+            self.replace_range_button,
         ):
             button.setFixedWidth(220)
             button.setSizePolicy(
@@ -709,6 +718,7 @@ class MainWindow(QMainWindow):
             self.propagate_button,
             self.hidden_ties_button,
             self.hairpin_layout_button,
+            self.replace_range_button,
         ):
             control.setEnabled(False)
 
@@ -1258,6 +1268,195 @@ class MainWindow(QMainWindow):
                 "Kursywa przetworzona z ostrzeżeniami",
                 "\n".join(warnings),
             )
+
+    def _ask_replace_range(
+        self,
+    ) -> tuple[int | None, int | None, set[int], str, str, bool] | None:
+        if self.document is None:
+            return None
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Zamień")
+        dialog.setMinimumWidth(600)
+        form = QFormLayout(dialog)
+
+        description = QLabel(
+            "Zamiana obejmuje tylko tokeny danych w wybranym zakresie i spinach. "
+            "Nie zmienia komentarzy, interpretacji ani kresek taktowych.\n"
+            "Rozróżnia wielkość liter.",
+            dialog,
+        )
+        description.setWordWrap(True)
+        form.addRow(description)
+
+        search_input = QLineEdit(dialog)
+        form.addRow("Znajdź:", search_input)
+
+        replacement_input = QLineEdit(dialog)
+        replacement_input.setPlaceholderText("Puste pole oznacza usunięcie szukanego tekstu")
+        form.addRow("Zamień na:", replacement_input)
+
+        preserve_checkbox = QCheckBox("Pomiń istniejące yyyy", dialog)
+        preserve_checkbox.setChecked(True)
+        preserve_checkbox.hide()
+        form.addRow(preserve_checkbox)
+
+        def sync_preserve_checkbox() -> None:
+            preserve_checkbox.setVisible(search_input.text() == "yy")
+
+        search_input.textChanged.connect(sync_preserve_checkbox)
+
+        all_file_checkbox = QCheckBox("Cały plik", dialog)
+        form.addRow(all_file_checkbox)
+
+        start_input = QSpinBox(dialog)
+        start_input.setRange(0, 999_999)
+        start_input.setValue(1)
+        form.addRow("Od taktu:", start_input)
+
+        end_input = QSpinBox(dialog)
+        end_input.setRange(0, 999_999)
+        end_input.setValue(1)
+        form.addRow("Do taktu:", end_input)
+
+        start_input.valueChanged.connect(end_input.setMinimum)
+        end_input.setMinimum(start_input.value())
+
+        def sync_measure_inputs() -> None:
+            range_enabled = not all_file_checkbox.isChecked()
+            start_input.setEnabled(range_enabled)
+            end_input.setEnabled(range_enabled)
+
+        all_file_checkbox.toggled.connect(sync_measure_inputs)
+        sync_measure_inputs()
+
+        spine_widget = QWidget(dialog)
+        spine_layout = QVBoxLayout(spine_widget)
+        spine_layout.setContentsMargins(0, 0, 0, 0)
+
+        all_checkbox = QCheckBox("Zaznacz wszystkie", spine_widget)
+        spine_layout.addWidget(all_checkbox)
+
+        descriptions = self._spine_descriptions()
+        spine_checkboxes: list[tuple[int, QCheckBox]] = []
+
+        for column in reversed(range(self.document.spine_count)):
+            checkbox = QCheckBox(descriptions[column], spine_widget)
+            spine_layout.addWidget(checkbox)
+            spine_checkboxes.append((column, checkbox))
+
+        def select_all(checked: bool) -> None:
+            for _, checkbox in spine_checkboxes:
+                checkbox.blockSignals(True)
+                checkbox.setChecked(checked)
+                checkbox.blockSignals(False)
+
+        def sync_all() -> None:
+            all_selected = bool(spine_checkboxes) and all(
+                checkbox.isChecked() for _, checkbox in spine_checkboxes
+            )
+            all_checkbox.blockSignals(True)
+            all_checkbox.setChecked(all_selected)
+            all_checkbox.blockSignals(False)
+
+        all_checkbox.toggled.connect(select_all)
+        for _, checkbox in spine_checkboxes:
+            checkbox.toggled.connect(sync_all)
+
+        spine_layout.addStretch(1)
+
+        spine_scroll = QScrollArea(dialog)
+        spine_scroll.setWidgetResizable(True)
+        spine_scroll.setMinimumHeight(180)
+        spine_scroll.setWidget(spine_widget)
+        form.addRow("Spine’y:", spine_scroll)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Zamień")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        search_input.setFocus()
+
+        while dialog.exec() == QDialog.DialogCode.Accepted:
+            search = search_input.text()
+            if not search:
+                QMessageBox.warning(
+                    dialog,
+                    "Brak szukanego tekstu",
+                    "Wpisz ciąg znaków do znalezienia.",
+                )
+                search_input.setFocus()
+                continue
+
+            selected_columns = {
+                column for column, checkbox in spine_checkboxes if checkbox.isChecked()
+            }
+            if not selected_columns:
+                QMessageBox.warning(
+                    dialog,
+                    "Nie wybrano spine’u",
+                    "Wybierz co najmniej jeden spine.",
+                )
+                continue
+
+            return (
+                None if all_file_checkbox.isChecked() else start_input.value(),
+                None if all_file_checkbox.isChecked() else end_input.value(),
+                selected_columns,
+                search,
+                replacement_input.text(),
+                preserve_checkbox.isChecked(),
+            )
+
+        return None
+
+    def apply_replace_range(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        choice = self._ask_replace_range()
+        if choice is None:
+            return
+
+        (
+            start_measure,
+            end_measure,
+            selected_columns,
+            search,
+            replacement,
+            preserve_yyyy,
+        ) = choice
+        before = self.document.to_text()
+
+        try:
+            count = self.document.replace_in_measure_range(
+                start_measure=start_measure,
+                end_measure=end_measure,
+                spine_columns=selected_columns,
+                search=search,
+                replacement=replacement,
+                preserve_yyyy=preserve_yyyy,
+            )
+        except HumdrumError as error:
+            self._show_copyable_error("Nie można wykonać zamiany", str(error))
+            return
+
+        if count:
+            self.undo_texts.append(before)
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self._update_window_title()
+            self.statusBar().showMessage(f"Liczba zamienionych wystąpień: {count}")
+        else:
+            self.statusBar().showMessage("Nie znaleziono wystąpień wymagających zamiany")
 
     def _ask_hidden_measure_range(
         self,
@@ -2487,6 +2686,7 @@ class MainWindow(QMainWindow):
             any(spine_type == "**kern" for spine_type in self.document.spine_types)
         )
         self.compact_records_button.setEnabled(True)
+        self.replace_range_button.setEnabled(True)
         self.hidden_ties_button.setEnabled("**kern" in self.document.spine_types)
 
         self.system_decoration_input.blockSignals(True)

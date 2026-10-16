@@ -816,6 +816,100 @@ class HumdrumDocument:
             for subtoken in token.split(" ")
         )
 
+    def replace_in_measure_range(
+        self,
+        *,
+        start_measure: int | None,
+        end_measure: int | None,
+        spine_columns: set[int],
+        search: str,
+        replacement: str,
+        preserve_yyyy: bool = True,
+    ) -> int:
+        from spineworks.spine_validation import RecordKind, trace_spines
+
+        if start_measure is not None and end_measure is not None and start_measure > end_measure:
+            raise HumdrumError("Pierwszy takt zakresu nie może być późniejszy niż ostatni.")
+        if not search:
+            raise HumdrumError("Wpisz ciąg znaków do znalezienia.")
+        if any(character in search + replacement for character in "\t\r\n"):
+            raise HumdrumError("Tekst zamiany nie może zawierać tabulatorów ani nowych linii.")
+
+        selected = {column for column in spine_columns if 0 <= column < self.spine_count}
+        if not selected:
+            raise HumdrumError("Nie wybrano żadnego spine’u.")
+
+        trace = trace_spines(self)
+        if trace.issue is not None:
+            raise HumdrumError(f"Linia {trace.issue.line_number}: {trace.issue.message}")
+
+        current_measure: int | None = None
+        updates: dict[int, list[str]] = {}
+        changed_count = 0
+
+        for row in trace.records:
+            record = row.record
+
+            if record.kind is RecordKind.BARLINE:
+                numbered_barline = next(
+                    (match for token in record.fields if (match := re.match(r"^=+(\d+)", token))),
+                    None,
+                )
+                if numbered_barline is not None:
+                    current_measure = int(numbered_barline.group(1))
+                continue
+
+            if record.kind is not RecordKind.DATA:
+                continue
+            if start_measure is not None or end_measure is not None:
+                if current_measure is None:
+                    continue
+                if start_measure is not None and current_measure < start_measure:
+                    continue
+                if end_measure is not None and current_measure > end_measure:
+                    continue
+
+            fields = list(record.fields)
+            line_changed = False
+
+            for column, branch in enumerate(row.branches):
+                if branch.identity.root_column not in selected:
+                    continue
+
+                token = fields[column]
+                if token == ".":
+                    continue
+
+                if search == "yy" and preserve_yyyy:
+                    changed_token, count = re.subn(
+                        r"(?<!y)yy(?!y)",
+                        lambda match: replacement,
+                        token,
+                    )
+                else:
+                    count = token.count(search)
+                    changed_token = token.replace(search, replacement)
+
+                if changed_token == token:
+                    continue
+                if not changed_token:
+                    raise HumdrumError(
+                        f"Linia {record.line_number}, kolumna {column + 1}: "
+                        "zamiana utworzyłaby puste pole danych."
+                    )
+
+                fields[column] = changed_token
+                changed_count += count
+                line_changed = True
+
+            if line_changed:
+                updates[record.line_number - 1] = fields
+
+        for line_number, fields in updates.items():
+            self.lines[line_number] = "\t".join(fields)
+
+        return changed_count
+
     def hide_measure_range(
         self,
         *,

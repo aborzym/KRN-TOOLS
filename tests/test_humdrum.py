@@ -1365,3 +1365,150 @@ def test_preserves_descriptive_custos_comments(comment: str) -> None:
 
     assert document.correct_custos() is False
     assert document.to_text() == source
+
+
+def test_replace_in_range_changes_only_selected_data():
+    source = (
+        "**kern\t**kern\n"
+        "=1\t=1\n"
+        "4cyy\t4eyy\n"
+        "=2\t=2\n"
+        "!opis yy\t!opis yy\n"
+        "*repyy\t*repyy\n"
+        "4cyy 4eyyyy 4gyy\t4byy\n"
+        "=3\t=3\n"
+        "4ryy\t4ryy\n"
+        "=4\t=4\n"
+        "4dyy\t4fyy\n"
+        "*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    assert (
+        document.replace_in_measure_range(
+            start_measure=2,
+            end_measure=3,
+            spine_columns={0},
+            search="yy",
+            replacement="yyyy",
+        )
+        == 3
+    )
+
+    expected = source.replace(
+        "4cyy 4eyyyy 4gyy\t4byy",
+        "4cyyyy 4eyyyy 4gyyyy\t4byy",
+    ).replace("4ryy\t4ryy", "4ryyyy\t4ryy")
+    assert document.to_text() == expected
+
+    assert (
+        document.replace_in_measure_range(
+            start_measure=2,
+            end_measure=3,
+            spine_columns={0},
+            search="yy",
+            replacement="yyyy",
+        )
+        == 0
+    )
+    assert document.to_text() == expected
+
+
+def test_replace_in_range_can_include_existing_yyyy():
+    document = HumdrumDocument.from_text("**kern\n=1\n4cyy 4eyyyy\n*-\n")
+
+    assert (
+        document.replace_in_measure_range(
+            start_measure=1,
+            end_measure=1,
+            spine_columns={0},
+            search="yy",
+            replacement="yyyy",
+            preserve_yyyy=False,
+        )
+        == 3
+    )
+    assert document.to_text() == "**kern\n=1\n4cyyyy 4eyyyyyyyy\n*-\n"
+
+
+def test_replace_in_range_is_case_sensitive_and_allows_deletion():
+    document = HumdrumDocument.from_text("**text\n=1\nAbA\n.\n*-\n")
+
+    assert (
+        document.replace_in_measure_range(
+            start_measure=1,
+            end_measure=1,
+            spine_columns={0},
+            search="A",
+            replacement="",
+        )
+        == 2
+    )
+    assert document.to_text() == "**text\n=1\nb\n.\n*-\n"
+
+
+def test_replace_in_range_tracks_split_branches():
+    source = "**kern\t**kern\n=1\t=1\n*^\t*\n4cyy\t4eyy\t4gyy\n*v\t*v\t*\n4dyy\t4fyy\n*-\t*-\n"
+    document = HumdrumDocument.from_text(source)
+
+    assert (
+        document.replace_in_measure_range(
+            start_measure=1,
+            end_measure=1,
+            spine_columns={0},
+            search="yy",
+            replacement="yyyy",
+        )
+        == 3
+    )
+    assert document.to_text() == (
+        source.replace("4cyy", "4cyyyy").replace("4eyy", "4eyyyy").replace("4dyy", "4dyyyy")
+    )
+
+
+def test_replace_in_range_error_leaves_document_unchanged():
+    source = "**text\n=1\nabc\nab\n*-\n"
+    document = HumdrumDocument.from_text(source)
+
+    with pytest.raises(HumdrumError):
+        document.replace_in_measure_range(
+            start_measure=1,
+            end_measure=1,
+            spine_columns={0},
+            search="ab",
+            replacement="",
+        )
+
+    assert document.to_text() == source
+
+
+def test_replace_in_whole_file_includes_data_before_first_barline():
+    source = (
+        "**kern\t**kern\n"
+        "!yy\t!yy\n"
+        "*repyy\t*repyy\n"
+        "4cyy\t4eyy\n"
+        "=\t=\n"
+        "4dyy\t4fyy\n"
+        "=10\t=10\n"
+        "4eyy\t4gyy\n"
+        "*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    assert (
+        document.replace_in_measure_range(
+            start_measure=None,
+            end_measure=None,
+            spine_columns={0},
+            search="yy",
+            replacement="yyyy",
+        )
+        == 3
+    )
+
+    assert document.to_text() == (
+        source.replace("4cyy", "4cyyyy")
+        .replace("4dyy", "4dyyyy")
+        .replace("4eyy\t4gyy", "4eyyyy\t4gyy")
+    )
