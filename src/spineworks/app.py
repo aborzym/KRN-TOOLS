@@ -68,6 +68,8 @@ from spineworks.hairpin_layouts import repair_hairpin_layouts
 from spineworks.hidden_ties import repair_hidden_ties
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.multibar_rests import annotate_multibar_rests
+from spineworks.signature_dialog import NAME_SETTING, SignatureDialog
+from spineworks.signatures import add_signature
 from spineworks.spine_editor import SpineEditor
 from spineworks.theme import SPINEWORKS_STYLE
 from spineworks.updater import UpdateManager
@@ -520,7 +522,6 @@ class MainWindow(QMainWindow):
         self.multibar_rests_button.clicked.connect(self.apply_multibar_rests)
 
         cleanup_row = QHBoxLayout()
-        cleanup_row = QHBoxLayout()
         cleanup_row.setSpacing(12)
         cleanup_row.addStretch()
 
@@ -544,6 +545,18 @@ class MainWindow(QMainWindow):
 
         cleanup_row.addStretch()
         layout.addLayout(cleanup_row)
+        signature_row = QHBoxLayout()
+        signature_row.setSpacing(12)
+        signature_row.addStretch()
+        self.signature_button = QPushButton("Dodaj podpis")
+        self.signature_button.setObjectName("primaryButton")
+        self.signature_button.setFixedWidth(220)
+        self.signature_button.setEnabled(False)
+        self.signature_button.clicked.connect(self.apply_signature)
+        signature_row.addWidget(self.signature_button)
+        signature_row.addStretch()
+        layout.addLayout(signature_row)
+
         preview_row = QHBoxLayout()
         preview_row.setContentsMargins(0, 8, 0, 0)
         preview_row.addStretch()
@@ -704,6 +717,7 @@ class MainWindow(QMainWindow):
             self.system_decoration_input.blockSignals(False)
 
         for control in (
+            self.signature_button,
             self.save_action,
             self.save_as_action,
             self.reload_action,
@@ -2299,6 +2313,34 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Nie znaleziono custosów do poprawienia")
 
+    def apply_signature(self) -> None:
+        if self.document is None:
+            return
+        dialog = SignatureDialog(self.document, self.settings, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        before = self.document.to_text()
+        selected = dialog.existing.currentData()
+        try:
+            updated = add_signature(
+                self.document, dialog.workflow.currentData(), dialog.name.text(),
+                selected=selected,
+                action=dialog.action.currentData() if selected else "add",
+            )
+        except ValueError as error:
+            QMessageBox.warning(self, "Dodaj podpis", str(error))
+            return
+        self.settings.setValue(NAME_SETTING, dialog.name.text())
+        if updated.to_text() == before:
+            return
+        self.undo_texts.append(before)
+        self.document = updated
+        self.undo_action.setEnabled(True)
+        # Signatures only change reference records. Keep pending header field edits
+        # and their widgets intact; the new document already has updated line indexes.
+        self._update_window_title()
+        self.statusBar().showMessage("Dodano podpis — zmiana czeka na zapis")
+
     def undo(self) -> None:
         if self.field_edits_dirty:
             self.field_edits_dirty = False
@@ -2741,6 +2783,7 @@ class MainWindow(QMainWindow):
     def _refresh_table(self) -> None:
         if self.document is None:
             return
+        self.signature_button.setEnabled(True)
         vertical_scroll = self.table.verticalScrollBar().value()
         self.field_edits_dirty = False
         self.undo_action.setEnabled(bool(self.undo_texts))
