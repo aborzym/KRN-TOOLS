@@ -132,8 +132,11 @@ def trace_rhythm(
     *,
     structure: SpineTrace | None = None,
     cache: RhythmCache | None = None,
+    allow_auxiliary_rows: bool = False,
 ) -> RhythmTrace:
     """Odczytaj rytm, wykorzystując stan niezmienionego początku."""
+    if allow_auxiliary_rows:
+        cache = None
     if structure is None:
         structure = trace_spines(document)
 
@@ -224,7 +227,11 @@ def trace_rhythm(
                 tokens = tuple(record.fields[column] for column in kern_columns)
 
                 null_kern_row = not tokens or all(token == "." for token in tokens)
-                if null_kern_row and any(token != "." for token in record.fields):
+                if (
+                    null_kern_row
+                    and not allow_auxiliary_rows
+                    and any(token != "." for token in record.fields)
+                ):
                     raise HumdrumError(
                         "Nie można ustalić czasu wiersza: brak nowego tokenu rytmicznego **kern."
                     )

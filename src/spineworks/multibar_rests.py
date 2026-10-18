@@ -134,7 +134,11 @@ def annotate_multibar_rests(
     if structure.issue is not None:
         raise HumdrumError(f"Linia {structure.issue.line_number}: {structure.issue.message}")
 
-    rhythm = trace_rhythm(document, structure=structure)
+    rhythm = trace_rhythm(
+        document,
+        structure=structure,
+        allow_auxiliary_rows=True,
+    )
     if rhythm.issue is not None:
         raise HumdrumError(f"Linia {rhythm.issue.line_number}: {rhythm.issue.message}")
 
