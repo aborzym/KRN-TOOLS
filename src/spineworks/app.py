@@ -59,6 +59,7 @@ from spineworks.filters import (
     HumdrumToolError,
     compact_records,
     insert_spine,
+    remove_empty_local_comments,
     remove_spine,
     remove_system_breaks,
     run_addic,
@@ -67,6 +68,7 @@ from spineworks.filters import (
 from spineworks.hairpin_layouts import repair_hairpin_layouts
 from spineworks.hidden_ties import repair_hidden_ties
 from spineworks.humdrum import HumdrumDocument, HumdrumError
+from spineworks.multibar_creation import create_multibar_rests, split_multibar_rests
 from spineworks.multibar_rests import annotate_multibar_rests
 from spineworks.signature_dialog import NAME_SETTING, SignatureDialog
 from spineworks.signatures import add_signature
@@ -2235,33 +2237,269 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Nie znaleziono elementów wymagających kolorowania")
 
+    def _ask_multibar_rests(
+        self,
+    ) -> tuple[str, int | None, int | None, set[int], bool, bool] | None:
+        if self.document is None:
+            return None
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Pauzy wielotaktowe")
+        dialog.setMinimumWidth(580)
+        form = QFormLayout(dialog)
+
+        mode_widget = QWidget(dialog)
+        mode_layout = QHBoxLayout(mode_widget)
+        mode_layout.setContentsMargins(0, 0, 0, 0)
+
+        create_radio = QRadioButton("Twórz", mode_widget)
+        split_radio = QRadioButton("Rozbij na całotaktowe", mode_widget)
+        create_radio.setChecked(True)
+        mode_layout.addWidget(create_radio)
+        mode_layout.addWidget(split_radio)
+        mode_layout.addStretch()
+        form.addRow("Operacja:", mode_widget)
+
+        all_measures_checkbox = QCheckBox("Cały utwór", dialog)
+        form.addRow(all_measures_checkbox)
+
+        start_input = QSpinBox(dialog)
+        start_input.setRange(0, 999_999)
+        start_input.setValue(1)
+        form.addRow("Od taktu:", start_input)
+
+        end_input = QSpinBox(dialog)
+        end_input.setRange(1, 999_999)
+        end_input.setValue(1)
+        form.addRow("Do taktu:", end_input)
+
+        start_input.valueChanged.connect(end_input.setMinimum)
+
+        def sync_measure_inputs(checked: bool) -> None:
+            start_input.setEnabled(not checked)
+            end_input.setEnabled(not checked)
+
+        all_measures_checkbox.toggled.connect(sync_measure_inputs)
+
+        without_layout_checkbox = QCheckBox("Bez LO:N:vis", dialog)
+        layout_only_checkbox = QCheckBox("Tylko dopisz LO:N:vis", dialog)
+        form.addRow(without_layout_checkbox)
+        form.addRow(layout_only_checkbox)
+
+        def uncheck_layout_only(checked: bool) -> None:
+            if checked:
+                layout_only_checkbox.setChecked(False)
+
+        def uncheck_without_layout(checked: bool) -> None:
+            if checked:
+                without_layout_checkbox.setChecked(False)
+
+        without_layout_checkbox.toggled.connect(uncheck_layout_only)
+        layout_only_checkbox.toggled.connect(uncheck_without_layout)
+
+        help_icon = QLabel("ⓘ", dialog)
+        help_icon.setStyleSheet(
+            """
+            QLabel {
+                background: transparent;
+                color: #9fc9b0;
+                font-size: 16px;
+            }
+            QToolTip {
+                background-color: #18271e;
+                color: #e7f4eb;
+                border: 1px solid #476551;
+                padding: 6px;
+                font-size: 12px;
+            }
+            """
+        )
+        help_icon.setToolTip(
+            "<qt><div style='width: 290px;'>"
+            "<b>Twórz</b> — grupuje widoczne pauzy całotaktowe po 4, potem po 2. "
+            "Ciąg przerywają podwójne kreski, zmiany klucza lub metrum "
+            "i ukryte pauzy.<br><br>"
+            "<b>Rozbij</b> — przywraca pauzy całotaktowe i usuwa ich LO:N:vis. "
+            "Pomija wiersze z przednutkami; nie dodaje wierszy danych.<br><br>"
+            "<b>LO:N:vis</b> — domyślnie dopisuje brakujące oznaczenia "
+            "poza 4/4 i 2/2. Opcje poniżej pozwalają je pominąć "
+            "albo wyłącznie dopisać.<br><br>"
+            "Działa w wybranych taktach i spinach **kern."
+            "</div></qt>"
+        )
+        help_row = QWidget(dialog)
+        help_layout = QHBoxLayout(help_row)
+        help_layout.setContentsMargins(0, 0, 0, 0)
+        help_layout.addStretch()
+        help_layout.addWidget(help_icon)
+        form.insertRow(0, help_row)
+
+        spine_widget = QWidget(dialog)
+        spine_layout = QVBoxLayout(spine_widget)
+        spine_layout.setContentsMargins(0, 0, 0, 0)
+
+        all_spines_checkbox = QCheckBox("Zaznacz wszystkie", spine_widget)
+        spine_layout.addWidget(all_spines_checkbox)
+
+        descriptions = self._spine_descriptions()
+        spine_checkboxes: list[tuple[int, QCheckBox]] = []
+
+        for column in reversed(range(self.document.spine_count)):
+            if self.document.spine_types[column] != "**kern":
+                continue
+
+            checkbox = QCheckBox(descriptions[column], spine_widget)
+            spine_layout.addWidget(checkbox)
+            spine_checkboxes.append((column, checkbox))
+
+        def select_all_spines(checked: bool) -> None:
+            for _, checkbox in spine_checkboxes:
+                checkbox.blockSignals(True)
+                checkbox.setChecked(checked)
+                checkbox.blockSignals(False)
+
+        def sync_all_spines() -> None:
+            checked = bool(spine_checkboxes) and all(
+                checkbox.isChecked() for _, checkbox in spine_checkboxes
+            )
+            all_spines_checkbox.blockSignals(True)
+            all_spines_checkbox.setChecked(checked)
+            all_spines_checkbox.blockSignals(False)
+
+        all_spines_checkbox.toggled.connect(select_all_spines)
+        for _, checkbox in spine_checkboxes:
+            checkbox.toggled.connect(sync_all_spines)
+
+        spine_layout.addStretch()
+
+        spine_scroll = QScrollArea(dialog)
+        spine_scroll.setWidgetResizable(True)
+        spine_scroll.setMinimumHeight(180)
+        spine_scroll.setWidget(spine_widget)
+        form.addRow("Spiny **kern:", spine_scroll)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        def sync_mode() -> None:
+            creating = create_radio.isChecked()
+            without_layout_checkbox.setVisible(creating)
+            layout_only_checkbox.setVisible(creating)
+            buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
+                "Dopisz LO:N:vis"
+                if creating and layout_only_checkbox.isChecked()
+                else "Twórz"
+                if creating
+                else "Rozbij"
+            )
+
+        create_radio.toggled.connect(sync_mode)
+        layout_only_checkbox.toggled.connect(sync_mode)
+        sync_mode()
+
+        while dialog.exec() == QDialog.DialogCode.Accepted:
+            selected = {column for column, checkbox in spine_checkboxes if checkbox.isChecked()}
+            if not selected:
+                QMessageBox.warning(
+                    dialog,
+                    "Nie wybrano spinu",
+                    "Wybierz co najmniej jeden spin **kern.",
+                )
+                continue
+
+            whole_file = all_measures_checkbox.isChecked()
+            return (
+                "create" if create_radio.isChecked() else "split",
+                None if whole_file else start_input.value(),
+                None if whole_file else end_input.value(),
+                selected,
+                without_layout_checkbox.isChecked(),
+                layout_only_checkbox.isChecked(),
+            )
+
+        return None
+
     def apply_multibar_rests(self) -> None:
         if self.document is None:
             return
         if not self.apply_instrument_codes(show_unchanged_status=False):
             return
 
+        choice = self._ask_multibar_rests()
+        if choice is None:
+            return
+
+        (
+            mode,
+            start_measure,
+            end_measure,
+            selected_columns,
+            without_layout,
+            layout_only,
+        ) = choice
+
         before = self.document.to_text()
+        created_count = 0
+        split_count = 0
+        layout_count = 0
+        warnings: tuple[str, ...] = ()
 
         try:
-            document, count, warnings = annotate_multibar_rests(self.document)
+            if mode == "split":
+                document, split_count, warnings = split_multibar_rests(
+                    self.document,
+                    kern_columns=selected_columns,
+                    start_measure=start_measure,
+                    end_measure=end_measure,
+                )
+                if split_count:
+                    document = remove_empty_local_comments(document)
+            else:
+                document = HumdrumDocument.from_text(before)
+
+                if not layout_only:
+                    document, created_count = create_multibar_rests(
+                        document,
+                        kern_columns=selected_columns,
+                        start_measure=start_measure,
+                        end_measure=end_measure,
+                    )
+
+                if not without_layout:
+                    document, layout_count, warnings = annotate_multibar_rests(
+                        document,
+                        kern_columns=selected_columns,
+                        start_measure=start_measure,
+                        end_measure=end_measure,
+                    )
+
         except HumdrumError as error:
             self._show_copyable_error(
-                "Nie można oznaczyć pauz wielotaktowych",
+                "Nie można przetworzyć pauz wielotaktowych",
                 str(error),
             )
             return
 
-        if count:
+        if document.to_text() != before:
             self.undo_texts.append(before)
             self.document = document
             self.undo_action.setEnabled(True)
             self._refresh_table()
             self._update_window_title()
 
-        self.statusBar().showMessage(
-            f"Dodano oznaczenia pauz: {count}. Przypadki do sprawdzenia: {len(warnings)}"
+        summary = (
+            f"Utworzono pauz: {created_count}. "
+            f"Rozbito pauz: {split_count}. "
+            f"Dodano LO:N:vis: {layout_count}. "
+            f"Przypadki do sprawdzenia: {len(warnings)}"
         )
+        self.statusBar().showMessage(summary)
 
         if warnings:
             dialog = QDialog(self)
@@ -2270,8 +2508,7 @@ class MainWindow(QMainWindow):
             dialog_layout = QVBoxLayout(dialog)
 
             description = QLabel(
-                f"Dodano oznaczenia: {count}. "
-                "Poniższe przypadki pominięto; możesz skopiować ich opis.",
+                summary + "\nPoniższe przypadki pominięto; możesz skopiować ich opis.",
                 dialog,
             )
             description.setWordWrap(True)
@@ -2323,7 +2560,9 @@ class MainWindow(QMainWindow):
         selected = dialog.existing.currentData()
         try:
             updated = add_signature(
-                self.document, dialog.workflow.currentData(), dialog.name.text(),
+                self.document,
+                dialog.workflow.currentData(),
+                dialog.name.text(),
                 selected=selected,
                 action=dialog.action.currentData() if selected else "add",
             )

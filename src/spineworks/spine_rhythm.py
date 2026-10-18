@@ -162,6 +162,11 @@ def trace_rhythm(
     current_time = Fraction(0)
     initialized = False
 
+    meters: dict[int, MeterSignature] = {}
+    measure_end: Fraction | None = None
+    measure_duration: Fraction | None = None
+    measure_has_data = False
+
     if prefix:
         checkpoint = checkpoints[-1]
         previous = checkpoint.previous
@@ -218,6 +223,29 @@ def trace_rhythm(
             remaining_before = remaining
             elapsed = Fraction(0)
 
+            if allow_auxiliary_rows:
+                if record.kind is RecordKind.INTERPRETATION:
+                    for token, branch in zip(record.fields, row.branches, strict=True):
+                        if branch.identity.spine_type != "**kern":
+                            continue
+                        if token.startswith("*M") and token[2:3].isdigit():
+                            meters[branch.identity.root_column] = parse_meter(token)
+
+                if record.kind is RecordKind.BARLINE:
+                    active_roots = {
+                        branch.identity.root_column
+                        for branch in row.branches
+                        if branch.identity.spine_type == "**kern"
+                    }
+                    durations = {meters[root].duration for root in active_roots if root in meters}
+                    if active_roots <= meters.keys() and len(durations) == 1:
+                        measure_duration = next(iter(durations))
+                        measure_end = current_time + measure_duration
+                    else:
+                        measure_duration = None
+                        measure_end = None
+                    measure_has_data = False
+
             if record.kind is RecordKind.DATA:
                 kern_columns = [
                     column
@@ -225,8 +253,9 @@ def trace_rhythm(
                     if branch.identity.spine_type == "**kern"
                 ]
                 tokens = tuple(record.fields[column] for column in kern_columns)
-
+                kern_before = tuple(remaining[column] for column in kern_columns)
                 null_kern_row = not tokens or all(token == "." for token in tokens)
+
                 if (
                     null_kern_row
                     and not allow_auxiliary_rows
@@ -236,20 +265,73 @@ def trace_rhythm(
                         "Nie można ustalić czasu wiersza: brak nowego tokenu rytmicznego **kern."
                     )
 
-                if not null_kern_row:
-                    elapsed, kern_remaining = advance_kern_row(
-                        tokens,
-                        tuple(remaining[column] for column in kern_columns),
-                    )
+                kern_remaining = kern_before
 
-                    updated = list(remaining)
-                    for column, value in zip(
-                        kern_columns,
-                        kern_remaining,
-                        strict=True,
-                    ):
-                        updated[column] = value
-                    remaining = tuple(updated)
+                if not null_kern_row:
+                    elapsed, kern_remaining = advance_kern_row(tokens, kern_before)
+                elif (
+                    allow_auxiliary_rows
+                    and not measure_has_data
+                    and measure_end is not None
+                    and current_time < measure_end
+                ):
+                    positive = [value for value in kern_before if value > 0]
+                    if positive:
+                        elapsed = min(positive)
+                        kern_remaining = tuple(
+                            max(Fraction(0), value - elapsed) for value in kern_before
+                        )
+
+                if allow_auxiliary_rows and elapsed > 0:
+                    if measure_end is not None:
+                        available = measure_end - current_time
+                        if available <= 0:
+                            raise HumdrumError(
+                                "Dane rytmiczne wykraczają poza pełny takt wynikający z metrum."
+                            )
+
+                        active_lengths = []
+                        rest_continuations = True
+
+                        for token, before in zip(tokens, kern_before, strict=True):
+                            duration = kern_duration(token)
+                            length = before if duration is None else duration
+
+                            if length > 0:
+                                active_lengths.append(length)
+                                if token != "." and "r" not in token:
+                                    rest_continuations = False
+
+                        can_split_at_barline = (
+                            measure_duration is not None
+                            and bool(active_lengths)
+                            and rest_continuations
+                            and all(
+                                length >= available and (length - available) % measure_duration == 0
+                                for length in active_lengths
+                            )
+                        )
+
+                        if elapsed > available and can_split_at_barline:
+                            excess = elapsed - available
+                            restored = []
+
+                            for token, before, after in zip(
+                                tokens, kern_before, kern_remaining, strict=True
+                            ):
+                                duration = kern_duration(token)
+                                active = before > 0 or (duration is not None and duration > 0)
+                                restored.append(after + excess if active else after)
+
+                            kern_remaining = tuple(restored)
+                            elapsed = available
+
+                    measure_has_data = True
+
+                updated = list(remaining)
+                for column, value in zip(kern_columns, kern_remaining, strict=True):
+                    updated[column] = value
+                remaining = tuple(updated)
         except HumdrumError as error:
             return finish(StructureIssue(record.line_number, str(error)))
 

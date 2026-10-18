@@ -280,6 +280,16 @@ def remove_system_breaks(document: HumdrumDocument) -> HumdrumDocument:
     return HumdrumDocument.from_text(output)
 
 
+def remove_empty_local_comments(document: HumdrumDocument) -> HumdrumDocument:
+    rid = find_humdrum_tool("rid")
+    output = _run_filter(
+        [rid, "-l"],
+        document.to_text(),
+        "rid -l",
+    )
+    return HumdrumDocument.from_text(output)
+
+
 def compact_records(document: HumdrumDocument) -> HumdrumDocument:
     rid = find_humdrum_tool("rid")
 

@@ -160,3 +160,51 @@ def test_rejects_incorrect_internal_bar_boundary():
     assert count == 0
     assert len(warnings) == 1
     assert result.to_text() == source
+
+
+def test_recognizes_multibar_rests_in_additional_meters():
+    from spineworks.meter_rhythm import parse_meter
+    from spineworks.multibar_rests import rest_layout_candidate
+
+    cases = (
+        ("*M7/8", "1..r", (2, "0")),
+        ("*M7/8", "0..r", (4, "00")),
+        ("*M7/4", "0..r", (2, "0")),
+        ("*M7/4", "00..r", (4, "00")),
+        ("*M2/1", "000r", (4, "00")),
+        ("*M3/1", "000.r", (4, "00")),
+        ("*M7/8", "1..ryy", None),
+        ("*M4/4", "0r", None),
+        ("*M2/2", "00r", None),
+    )
+
+    for meter_token, token, expected in cases:
+        assert rest_layout_candidate(token, parse_meter(meter_token)) == expected
+
+
+def test_layout_requires_entire_rest_inside_selected_range():
+    from spineworks.humdrum import HumdrumDocument
+    from spineworks.multibar_rests import annotate_multibar_rests
+
+    source = "**kern\n*M3/4\n=1\n1.r\n=2\n.\n=3\n*-\n"
+    document = HumdrumDocument.from_text(source)
+
+    partial, count, _ = annotate_multibar_rests(
+        document,
+        kern_columns={0},
+        start_measure=1,
+        end_measure=1,
+    )
+    assert count == 0
+    assert partial.to_text() == source
+
+    complete, count, warnings = annotate_multibar_rests(
+        document,
+        kern_columns={0},
+        start_measure=1,
+        end_measure=2,
+    )
+    assert count == 1
+    assert not warnings
+    assert complete.to_text() == source.replace("1.r\n", "!LO:N:vis=0\n1.r\n")
+    assert document.to_text() == source

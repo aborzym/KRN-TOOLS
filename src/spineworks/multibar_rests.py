@@ -28,12 +28,26 @@ def rest_layout_candidate(
     if "yy" in token or len(token.split()) != 1:
         return None
 
-    match = re.fullmatch(r"([0-9]+\.*r)[^a-gA-Grq]*", token)
+    match = re.fullmatch(r"([0-9]+(?:%[0-9]+)?\.*r)[^a-gA-Grq]*", token)
     if match is None:
         return None
 
     options = REST_LAYOUTS.get((meter.numerator, meter.denominator), {})
-    return options.get(match.group(1))
+    candidate = options.get(match.group(1))
+    if candidate is not None:
+        return candidate
+
+    duration = kern_duration(token)
+    if duration is None:
+        return None
+
+    measure_count = duration / meter.duration
+    if measure_count == 2:
+        return 2, "0"
+    if measure_count == 4:
+        return 4, "00"
+
+    return None
 
 
 def rest_duration_matches(
@@ -129,7 +143,23 @@ def rest_span_matches(
 
 def annotate_multibar_rests(
     document: HumdrumDocument,
+    *,
+    kern_columns: set[int] | None = None,
+    start_measure: int | None = None,
+    end_measure: int | None = None,
 ) -> tuple[HumdrumDocument, int, tuple[str, ...]]:
+
+    if start_measure is not None and end_measure is not None and start_measure > end_measure:
+        raise HumdrumError("Pierwszy takt nie może być późniejszy niż ostatni.")
+
+    selected = {
+        column
+        for column, spine_type in enumerate(document.spine_types)
+        if spine_type == "**kern" and (kern_columns is None or column in kern_columns)
+    }
+    if not selected:
+        raise HumdrumError("Nie wybrano żadnego spinu **kern.")
+
     structure = trace_spines(document)
     if structure.issue is not None:
         raise HumdrumError(f"Linia {structure.issue.line_number}: {structure.issue.message}")
@@ -148,7 +178,24 @@ def annotate_multibar_rests(
     comment_lines: list[int] = []
     warnings: list[str] = []
     changed_count = 0
-    rest_tokens = {token for options in REST_LAYOUTS.values() for token in options}
+
+    measure_numbers: dict[int, int | None] = {}
+    current_measure: int | None = None
+
+    for traced in structure.records:
+        if traced.record.kind is RecordKind.BARLINE:
+            match = next(
+                (
+                    found
+                    for token in traced.record.fields
+                    if (found := re.match(r"^=+(\d+)", token))
+                ),
+                None,
+            )
+            if match is not None:
+                current_measure = int(match.group(1))
+
+        measure_numbers[traced.record.line_number] = current_measure
 
     for record_index, row in enumerate(structure.records):
         record = row.record
@@ -165,15 +212,18 @@ def annotate_multibar_rests(
             continue
 
         for column, branch in enumerate(row.branches):
-            if branch.identity.spine_type != "**kern":
+            if (
+                branch.identity.spine_type != "**kern"
+                or branch.identity.root_column not in selected
+            ):
                 continue
 
             token = record.fields[column]
             if "yy" in token:
                 continue
 
-            match = re.fullmatch(r"([0-9]+\.*r)[^a-gA-Grq]*", token)
-            if match is None or match.group(1) not in rest_tokens:
+            match = re.fullmatch(r"([0-9]+(?:%[0-9]+)?\.*r)[^a-gA-Grq]*", token)
+            if match is None:
                 continue
 
             comments = [
@@ -225,7 +275,24 @@ def annotate_multibar_rests(
                     f"nie potwierdzono granic {measure_count} pełnych taktów — pominięto."
                 )
                 continue
+            if start_measure is not None or end_measure is not None:
+                onset = timed_by_line[record.line_number].onset
+                end_time = onset + meter.duration * measure_count
+                covered_measures = [
+                    measure_numbers[traced.record.line_number]
+                    for traced in structure.records
+                    if traced.record.kind is RecordKind.BARLINE
+                    and onset <= timed_by_line[traced.record.line_number].onset < end_time
+                ]
 
+                outside_range = not covered_measures or any(
+                    number is None
+                    or (start_measure is not None and number < start_measure)
+                    or (end_measure is not None and number > end_measure)
+                    for number in covered_measures
+                )
+                if outside_range:
+                    continue
             layout_token = f"!LO:N:vis={visual}"
             empty_line = next(
                 (
