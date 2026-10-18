@@ -223,25 +223,26 @@ def trace_rhythm(
                 ]
                 tokens = tuple(record.fields[column] for column in kern_columns)
 
-                if not tokens or all(token == "." for token in tokens):
+                null_kern_row = not tokens or all(token == "." for token in tokens)
+                if null_kern_row and any(token != "." for token in record.fields):
                     raise HumdrumError(
                         "Nie można ustalić czasu wiersza: brak nowego tokenu rytmicznego **kern."
                     )
 
-                elapsed, kern_remaining = advance_kern_row(
-                    tokens,
-                    tuple(remaining[column] for column in kern_columns),
-                )
+                if not null_kern_row:
+                    elapsed, kern_remaining = advance_kern_row(
+                        tokens,
+                        tuple(remaining[column] for column in kern_columns),
+                    )
 
-                updated = list(remaining)
-                for column, value in zip(
-                    kern_columns,
-                    kern_remaining,
-                    strict=True,
-                ):
-                    updated[column] = value
-                remaining = tuple(updated)
-
+                    updated = list(remaining)
+                    for column, value in zip(
+                        kern_columns,
+                        kern_remaining,
+                        strict=True,
+                    ):
+                        updated[column] = value
+                    remaining = tuple(updated)
         except HumdrumError as error:
             return finish(StructureIssue(record.line_number, str(error)))
 
