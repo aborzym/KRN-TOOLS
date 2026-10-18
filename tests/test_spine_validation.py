@@ -2888,3 +2888,82 @@ def test_moves_final_clef_before_merges_and_preserves_closing_rows() -> None:
 
     assert trace.issue is None
     assert find_split_issues(trace) == ()
+
+
+@pytest.mark.parametrize(
+    ("interpretation", "expected"),
+    [
+        ("*X8va", "*X8va\t*X8va\t*"),
+        ("*8va", "*8va\t*8va\t*"),
+        ("*M3/4", "*M3/4\t*M3/4\t*"),
+        ("*clefF4", "*clefF4\t*\t*"),
+    ],
+)
+def test_reorders_interpretation_from_merged_spine(interpretation, expected):
+    source = (
+        "**kern\t**kern\n"
+        "=166\t=166\n"
+        "*^\t*\n"
+        "1c\t1e\t1g\n"
+        "*v\t*v\t*\n"
+        f"{interpretation}\t*\n"
+        "=167\t=167\n"
+        "*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    replacements = dict(prepare_clef_reordering(document, start_line=2, end_line=7))
+
+    assert replacements[5][0].text == expected
+    assert replacements[5][1].text == "*v\t*v\t*"
+    assert replacements[6] == ()
+    assert document.to_text() == source
+
+    lines = []
+    for number, text in enumerate(document.lines, start=1):
+        if number in replacements:
+            lines.extend(line.text for line in replacements[number])
+        else:
+            lines.append(text)
+
+    candidate = HumdrumDocument(lines, document.trailing_newline)
+    trace = trace_spines(candidate)
+
+    assert trace.issue is None
+    assert find_split_issues(trace) == ()
+
+
+def test_reorders_octave_end_in_unmerged_spine_after_other_merges():
+    source = (
+        "**kern\t**kern\t**kern\n"
+        "=166\t=166\t=166\n"
+        "*^\t*\t*^\n"
+        "1c\t1e\t1g\t1b\t1dd\n"
+        "*v\t*v\t*\t*\t*\n"
+        "*\t*\t*v\t*v\n"
+        "*\t*X8va\t*\n"
+        "=167\t=167\t=167\n"
+        "*-\t*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    replacements = dict(prepare_clef_reordering(document, start_line=2, end_line=8))
+
+    assert replacements[5][0].text == "*\t*\t*X8va\t*\t*"
+    assert replacements[5][1].text == document.lines[4]
+    assert replacements[7] == ()
+    assert 6 not in replacements
+    assert document.to_text() == source
+
+    lines = []
+    for number, text in enumerate(document.lines, start=1):
+        if number in replacements:
+            lines.extend(line.text for line in replacements[number])
+        else:
+            lines.append(text)
+
+    candidate = HumdrumDocument(lines, document.trailing_newline)
+    trace = trace_spines(candidate)
+
+    assert trace.issue is None
+    assert find_split_issues(trace) == ()

@@ -2900,13 +2900,16 @@ def prepare_clef_reordering(
         if all(token in {"*", "*v"} for token in record.fields):
             continue
 
-        if all(token == "*" or token.startswith("*clef") for token in record.fields):
-            clef_rows.append(row)
-        else:
+        if any(
+            token in {"*^", "*v", "*x", "*+", "*-"} or token.startswith("**")
+            for token in record.fields
+        ):
             raise HumdrumError(
-                f"Linia {record.line_number}: poza kluczami występują "
-                "inne interpretacje — ten przypadek wymaga osobnej naprawy."
+                f"Linia {record.line_number}: zmiana struktury spinów "
+                "nie może być przeniesiona jako zwykła interpretacja."
             )
+
+        clef_rows.append(row)
 
     if not clef_rows:
         return ()
@@ -2933,19 +2936,20 @@ def prepare_clef_reordering(
             if not destinations:
                 raise HumdrumError(
                     f"Linia {row.record.line_number}: "
-                    "nie można przypisać klucza do wcześniejszych warstw."
+                    "nie można przypisać interpretacji do wcześniejszych warstw."
                 )
 
-            column = min(destinations)
-            if fields[column] not in {"*", token}:
-                raise HumdrumError("Sprzeczne klucze w jednej warstwie.")
-            fields[column] = token
+            target_columns = [min(destinations)] if token.startswith("*clef") else destinations
 
+            for target_column in target_columns:
+                if fields[target_column] not in {"*", token}:
+                    raise HumdrumError("Sprzeczne interpretacje w jednej warstwie.")
+                fields[target_column] = token
         moved.append(
             DraftLine(
                 source_line=None,
                 text="\t".join(fields),
-                description=f"klucz z linii {row.record.line_number}",
+                description=f"interpretacja z linii {row.record.line_number}",
                 anchor_line=closing.record.line_number,
             )
         )
