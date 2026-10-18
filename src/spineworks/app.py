@@ -67,6 +67,7 @@ from spineworks.filters import (
 from spineworks.hairpin_layouts import repair_hairpin_layouts
 from spineworks.hidden_ties import repair_hidden_ties
 from spineworks.humdrum import HumdrumDocument, HumdrumError
+from spineworks.multibar_rests import annotate_multibar_rests
 from spineworks.spine_editor import SpineEditor
 from spineworks.theme import SPINEWORKS_STYLE
 from spineworks.updater import UpdateManager
@@ -510,7 +511,15 @@ class MainWindow(QMainWindow):
             "Zamień tekst w tokenach danych wybranych taktów i spinów."
         )
         self.replace_range_button.clicked.connect(self.apply_replace_range)
+        self.multibar_rests_button = QPushButton("Pauzy wielotaktowe")
+        self.multibar_rests_button.setObjectName("primaryButton")
+        self.multibar_rests_button.setEnabled(False)
+        self.multibar_rests_button.setToolTip(
+            "Dodaj LO:N:vis do widocznych pauz obejmujących 2 lub 4 pełne takty."
+        )
+        self.multibar_rests_button.clicked.connect(self.apply_multibar_rests)
 
+        cleanup_row = QHBoxLayout()
         cleanup_row = QHBoxLayout()
         cleanup_row.setSpacing(12)
         cleanup_row.addStretch()
@@ -524,6 +533,7 @@ class MainWindow(QMainWindow):
             self.hidden_ties_button,
             self.hairpin_layout_button,
             self.replace_range_button,
+            self.multibar_rests_button,
         ):
             button.setFixedWidth(220)
             button.setSizePolicy(
@@ -719,6 +729,7 @@ class MainWindow(QMainWindow):
             self.hidden_ties_button,
             self.hairpin_layout_button,
             self.replace_range_button,
+            self.multibar_rests_button,
         ):
             control.setEnabled(False)
 
@@ -2210,6 +2221,62 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Nie znaleziono elementów wymagających kolorowania")
 
+    def apply_multibar_rests(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        before = self.document.to_text()
+
+        try:
+            document, count, warnings = annotate_multibar_rests(self.document)
+        except HumdrumError as error:
+            self._show_copyable_error(
+                "Nie można oznaczyć pauz wielotaktowych",
+                str(error),
+            )
+            return
+
+        if count:
+            self.undo_texts.append(before)
+            self.document = document
+            self.undo_action.setEnabled(True)
+            self._refresh_table()
+            self._update_window_title()
+
+        self.statusBar().showMessage(
+            f"Dodano oznaczenia pauz: {count}. Przypadki do sprawdzenia: {len(warnings)}"
+        )
+
+        if warnings:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Pauzy wielotaktowe — przypadki do sprawdzenia")
+            dialog.resize(760, 450)
+            dialog_layout = QVBoxLayout(dialog)
+
+            description = QLabel(
+                f"Dodano oznaczenia: {count}. "
+                "Poniższe przypadki pominięto; możesz skopiować ich opis.",
+                dialog,
+            )
+            description.setWordWrap(True)
+            dialog_layout.addWidget(description)
+
+            report = QPlainTextEdit(dialog)
+            report.setReadOnly(True)
+            report.setPlainText("\n".join(warnings))
+            dialog_layout.addWidget(report)
+
+            buttons = QDialogButtonBox(
+                QDialogButtonBox.StandardButton.Close,
+                parent=dialog,
+            )
+            buttons.button(QDialogButtonBox.StandardButton.Close).setText("Zamknij")
+            buttons.rejected.connect(dialog.reject)
+            dialog_layout.addWidget(buttons)
+            dialog.exec()
+
     def apply_custos(self) -> None:
         if self.document is None:
             return
@@ -2687,6 +2754,7 @@ class MainWindow(QMainWindow):
         )
         self.compact_records_button.setEnabled(True)
         self.replace_range_button.setEnabled(True)
+        self.multibar_rests_button.setEnabled("**kern" in self.document.spine_types)
         self.hidden_ties_button.setEnabled("**kern" in self.document.spine_types)
 
         self.system_decoration_input.blockSignals(True)
