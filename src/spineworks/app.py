@@ -7,7 +7,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import ClassVar
 
-from PySide6.QtCore import QEvent, QSettings, QSize, Qt, QTimer, QUrl, QUrlQuery
+from PySide6.QtCore import QEvent, QSettings, QSize, QStandardPaths, Qt, QTimer, QUrl, QUrlQuery
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -66,6 +66,14 @@ from spineworks.filters import (
     run_barnum,
 )
 from spineworks.hairpin_layouts import repair_hairpin_layouts
+from spineworks.header_templates import (
+    HEADER_ROWS,
+    apply_header_template,
+    collect_header_template,
+    sort_template_header,
+    suggest_header_template_name,
+    validate_header_template,
+)
 from spineworks.hidden_ties import repair_hidden_ties
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.multibar_creation import create_multibar_rests, split_multibar_rests
@@ -279,6 +287,23 @@ class MainWindow(QMainWindow):
         self.close_file_action.setShortcut(QKeySequence.StandardKey.Close)
         self.close_file_action.setEnabled(False)
         self.close_file_action.triggered.connect(self.close_file)
+        self.header_templates_button = QToolButton(self)
+        self.header_templates_button.setText("Szablony")
+        self.header_templates_button.setToolTip("Zapisz lub wczytaj szablon nagłówka.")
+        self.header_templates_button.setEnabled(False)
+        self.header_templates_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+
+        templates_menu = QMenu(self.header_templates_button)
+        templates_menu.addAction(
+            "Zapisz nagłówek jako szablon…",
+            self.save_header_template,
+        )
+        templates_menu.addAction(
+            "Wczytaj szablon nagłówka…",
+            self.load_header_template,
+        )
+        self.header_templates_button.setMenu(templates_menu)
+        toolbar.addWidget(self.header_templates_button)
         toolbar.addAction(self.close_file_action)
 
         toolbar.addSeparator()
@@ -719,6 +744,7 @@ class MainWindow(QMainWindow):
             self.system_decoration_input.blockSignals(False)
 
         for control in (
+            self.header_templates_button,
             self.signature_button,
             self.save_action,
             self.save_as_action,
@@ -801,6 +827,7 @@ class MainWindow(QMainWindow):
         self.close_file_action.setEnabled(True)
         self.save_action.setEnabled(True)
         self.save_as_action.setEnabled(True)
+        self.header_templates_button.setEnabled(True)
         self.system_decoration_input.setEnabled(True)
         self.propagate_button.setEnabled(True)
         self.addic_button.setEnabled(True)
@@ -884,7 +911,7 @@ class MainWindow(QMainWindow):
             return False
         try:
             document = HumdrumDocument.from_text(self.document.to_text())
-            document.sort_header_rows()
+            document = sort_template_header(document)
             text = document.to_text()
             self.current_path.write_text(text, encoding="utf-8")
         except (OSError, HumdrumError) as error:
@@ -919,7 +946,7 @@ class MainWindow(QMainWindow):
             path = path.with_name(path.name + ".krn")
         try:
             document = HumdrumDocument.from_text(self.document.to_text())
-            document.sort_header_rows()
+            document = sort_template_header(document)
             text = document.to_text()
             path.write_text(text, encoding="utf-8")
         except (OSError, HumdrumError) as error:
@@ -967,6 +994,224 @@ class MainWindow(QMainWindow):
             event.accept()
         else:
             event.ignore()
+
+    def _header_template_directory(self) -> Path:
+        stored = self.settings.value("header_templates/directory", "", type=str)
+        if stored:
+            directory = Path(stored)
+        else:
+            documents = QStandardPaths.writableLocation(
+                QStandardPaths.StandardLocation.DocumentsLocation
+            )
+            if not documents:
+                raise HumdrumError("Nie znaleziono systemowego katalogu Dokumenty.")
+            directory = Path(documents) / "SPINEWORKS" / "Szablony"
+
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def load_header_template(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        try:
+            directory = self._header_template_directory()
+        except (OSError, HumdrumError) as error:
+            QMessageBox.warning(self, "Nie można otworzyć szablonów", str(error))
+            return
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Wczytaj szablon nagłówka",
+            str(directory),
+            "Szablony nagłówka SPINEWORKS (*.json)",
+        )
+        if not filename:
+            return
+
+        path = Path(filename)
+        try:
+            template = json.loads(path.read_text(encoding="utf-8"))
+            kern_count, rows = validate_header_template(template)
+        except (OSError, UnicodeError, ValueError) as error:
+            QMessageBox.warning(self, "Nie można wczytać szablonu", str(error))
+            return
+
+        current_count = self.document.spine_types.count("**kern")
+        if kern_count != current_count:
+            QMessageBox.warning(
+                self,
+                "Niezgodna liczba kernów",
+                f"Szablon zawiera {kern_count} kernów, "
+                f"a bieżący plik {current_count}.\n"
+                "Nie wprowadzono zmian.",
+            )
+            return
+
+        selected = self._ask_header_template_rows(
+            title=f"Wczytaj nagłówek — {template['name']}",
+            rows=rows,
+            action_text="Zastosuj",
+        )
+        if selected is None:
+            return
+
+        before = self.document.to_text()
+        try:
+            document = apply_header_template(
+                self.document,
+                template,
+                selected_rows=selected,
+            )
+        except HumdrumError as error:
+            QMessageBox.warning(self, "Nie można zastosować szablonu", str(error))
+            return
+
+        self.settings.setValue("header_templates/directory", str(path.parent))
+
+        if document.to_text() == before:
+            self.statusBar().showMessage("Nagłówek jest już zgodny z szablonem")
+            return
+
+        self.undo_texts.append(before)
+        self.document = document
+        self.show_group_row = document.header.instrument_group_line is not None
+        self.undo_action.setEnabled(True)
+        self._sync_ig_button()
+        self._refresh_table()
+        self._update_window_title()
+        self.statusBar().showMessage(f"Wczytano szablon: {template['name']}")
+
+    def save_header_template(self) -> None:
+        if self.document is None:
+            return
+        if not self.apply_instrument_codes(show_unchanged_status=False):
+            return
+
+        suggested_name = suggest_header_template_name(
+            self.document,
+            self.current_path.name if self.current_path is not None else "",
+        )
+
+        try:
+            template = collect_header_template(
+                self.document,
+                name=suggested_name,
+            )
+            _, rows = validate_header_template(template)
+            directory = self._header_template_directory()
+        except (OSError, HumdrumError) as error:
+            QMessageBox.warning(self, "Nie można zapisać szablonu", str(error))
+            return
+
+        selected = self._ask_header_template_rows(
+            title="Zapisz szablon nagłówka",
+            rows=rows,
+            action_text="Dalej…",
+        )
+        if selected is None:
+            return
+
+        file_dialog = QFileDialog(
+            self,
+            "Zapisz szablon nagłówka",
+            str(directory / f"{suggested_name}.json"),
+            "Szablony nagłówka SPINEWORKS (*.json)",
+        )
+        file_dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        file_dialog.setFileMode(QFileDialog.FileMode.AnyFile)
+        file_dialog.setDefaultSuffix("json")
+
+        if file_dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        path = Path(file_dialog.selectedFiles()[0])
+
+        try:
+            template = collect_header_template(
+                self.document,
+                name=path.stem,
+                selected_rows=selected,
+            )
+            path.write_text(
+                json.dumps(template, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except (OSError, HumdrumError) as error:
+            QMessageBox.warning(self, "Nie można zapisać szablonu", str(error))
+            return
+
+        self.settings.setValue("header_templates/directory", str(path.parent))
+        self.statusBar().showMessage(f"Zapisano szablon: {path.name}")
+
+    def _ask_header_template_rows(
+        self,
+        *,
+        title: str,
+        rows: dict[str, list[str]],
+        action_text: str,
+    ) -> set[str] | None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(760, 580)
+        layout = QVBoxLayout(dialog)
+
+        description = QLabel(
+            "Wybierz wiersze nagłówka. Wartości są pokazane w kolejności spinów **kern w pliku.",
+            dialog,
+        )
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        checkboxes: dict[str, QCheckBox] = {}
+        for key, (label, _prefix) in HEADER_ROWS.items():
+            if key not in rows:
+                continue
+            checkbox = QCheckBox(label, dialog)
+            checkbox.setChecked(True)
+            layout.addWidget(checkbox)
+            checkboxes[key] = checkbox
+
+        preview = QPlainTextEdit(dialog)
+        preview.setReadOnly(True)
+        preview.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        layout.addWidget(preview, 1)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok_button.setText(action_text)
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Anuluj")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        def refresh_preview() -> None:
+            selected = [key for key, checkbox in checkboxes.items() if checkbox.isChecked()]
+            preview.setPlainText(
+                "\n\n".join(
+                    HEADER_ROWS[key][0]
+                    + "\n"
+                    + "\n".join(
+                        f"  Kern {index}: {value}" for index, value in enumerate(rows[key], start=1)
+                    )
+                    for key in selected
+                )
+            )
+            ok_button.setEnabled(bool(selected))
+
+        for checkbox in checkboxes.values():
+            checkbox.toggled.connect(refresh_preview)
+        refresh_preview()
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+
+        return {key for key, checkbox in checkboxes.items() if checkbox.isChecked()}
 
     def propagate_assignments(self) -> None:
         if self.document is None:
