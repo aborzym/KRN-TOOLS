@@ -84,7 +84,11 @@ def test_composes_two_ranges_and_preserves_original_numbers(
     trace = trace_spines(candidate)
 
     assert trace.issue is None
-    assert find_split_issues(trace) == ()
+    issues = find_split_issues(trace)
+    assert len(issues) == 1
+    assert issues[0].code == "cross_bar_reopening"
+    assert issues[0].line_number == 7
+    assert issues[0].related_lines == (8, 9)
     assert "4b\t4ryy" in combined
     assert "4cc\t4ryy" in combined
     assert document.to_text() == original

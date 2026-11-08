@@ -44,6 +44,7 @@ from spineworks.spine_validation import (
     build_measure_view,
     find_split_issues,
     group_split_issues,
+    plan_merge_reopening,
     read_records,
     trace_spines,
     validate_draft,
@@ -1157,6 +1158,10 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             return None
 
         editable_roots = {identity.root_column for identity in self.problem.editable_identities}
+        candidate = HumdrumDocument(
+            [row.record.text for row in trace.records],
+            False,
+        )
 
         for index, row in enumerate(trace.records):
             source_line = rendered[index].source_line
@@ -1176,23 +1181,18 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
                 )
                 if token == "*v" and branch.identity.root_column in editable_roots
             }
-            if not roots:
-                continue
 
-            for following in trace.records[index + 1 :]:
-                if following.record.kind is RecordKind.BARLINE:
-                    break
-                if following.record.kind is not RecordKind.INTERPRETATION:
+            for root in sorted(roots):
+                try:
+                    plan_merge_reopening(
+                        candidate,
+                        row.record.line_number,
+                        root,
+                    )
+                except HumdrumError:
                     continue
 
-                for token, branch in zip(
-                    following.record.fields,
-                    following.branches,
-                    strict=True,
-                ):
-                    root = branch.identity.root_column
-                    if token == "*^" and root in roots:
-                        return source_line, root
+                return source_line, root
 
         return None
 
@@ -1383,11 +1383,15 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
         current_line = self.draft.rendered_index(source_line) + 1
         analysis_end = len(rendered)
 
-        for index in range(current_line, len(rendered)):
-            records = read_records(rendered[index].text)
-            if records and records[0].kind is RecordKind.BARLINE:
-                analysis_end = index + 1
-                break
+        if operation == "join":
+            range_rendered, _ = self._target_structure()
+            analysis_end = len(range_rendered)
+        else:
+            for index in range(current_line, len(rendered)):
+                records = read_records(rendered[index].text)
+                if records and records[0].kind is RecordKind.BARLINE:
+                    analysis_end = index + 1
+                    break
 
         candidate = HumdrumDocument(
             [line.text for line in rendered[:analysis_end]],
@@ -1403,6 +1407,14 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             for branch in selected.branches
             if branch.identity.root_column == root_column
         )
+        cross_bar_join = False
+        if operation == "join":
+            plan = plan_merge_reopening(candidate, current_line, root_column)
+            cross_bar_join = any(
+                row.record.kind is RecordKind.BARLINE
+                and current_line < row.record.line_number < plan.reopening_line
+                for row in trace.records
+            )
 
         functions = {
             "join": (suggest_reopening_fill, self.draft.join_reopenings),
@@ -1415,7 +1427,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
         suggest, apply = functions[operation]
         rest_option = None
 
-        if identity.spine_type == "**kern":
+        if identity.spine_type == "**kern" and not cross_bar_join:
             meter = meter_at_line(candidate, current_line, root_column)
             options = meter_rest_options(meter)
             meter_key = (meter.numerator, meter.denominator)
@@ -1452,7 +1464,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
         timing_start = perf_counter()
 
         timing_start = perf_counter()
-        if operation == "join" and identity.spine_type != "**kern":
+        if operation == "join" and (identity.spine_type != "**kern" or cross_bar_join):
             suggestions = ()
         else:
             suggestions = suggest(

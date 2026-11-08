@@ -753,6 +753,14 @@ def suggest_reopening_fill(
     plan = plan_merge_reopening(document, source_line, root_column)
     structure = trace_spines(document)
 
+    crosses_barline = any(
+        row.record.kind is RecordKind.BARLINE
+        and source_line < row.record.line_number < plan.reopening_line
+        for row in structure.records
+    )
+    if crosses_barline:
+        return ()
+
     start_line = max(
         (
             row.record.line_number

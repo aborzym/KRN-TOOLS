@@ -2967,3 +2967,123 @@ def test_reorders_octave_end_in_unmerged_spine_after_other_merges():
 
     assert trace.issue is None
     assert find_split_issues(trace) == ()
+
+
+def test_merge_reopening_plan_crosses_adjacent_barline() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n*^\n=1\t=1\n1c\t1e\n*v\t*v\n=2\n*^\n1d\t1f\n*-\t*-\n"
+    )
+
+    plan = plan_merge_reopening(document, 5, 0)
+
+    assert plan.source_line == 5
+    assert plan.reopening_line == 7
+
+
+@pytest.mark.parametrize(
+    "prepare",
+    (prepare_merge_reopening, prepare_merge_reopenings),
+)
+def test_merge_reopening_preserves_barline_and_other_spine(prepare) -> None:
+    source = (
+        "**kern\t**kern\n"
+        "*^\t*\n"
+        "=1\t=1\t=1\n"
+        "1c\t1e\t1g\n"
+        "*v\t*v\t*\n"
+        "!uwaga\t!\n"
+        "=2\t=2\n"
+        "*clefF4\t*\n"
+        "*^\t*\n"
+        "1d\t1f\t1a\n"
+        "*-\t*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    proposal = prepare(document, 5, 0)
+    replacements = dict(proposal.replacements)
+    lines = []
+
+    for number, line in enumerate(document.lines, start=1):
+        if number in replacements:
+            lines.extend(item.text for item in replacements[number])
+        else:
+            lines.append(line)
+
+    result = HumdrumDocument(lines, document.trailing_newline)
+
+    assert result.to_text() == (
+        "**kern\t**kern\n"
+        "*^\t*\n"
+        "=1\t=1\t=1\n"
+        "1c\t1e\t1g\n"
+        "!uwaga\t!\t!\n"
+        "=2\t=2\t=2\n"
+        "*clefF4\t*clefF4\t*\n"
+        "1d\t1f\t1a\n"
+        "*-\t*-\t*-\n"
+    )
+    assert proposal.proposed_cells == ()
+    assert trace_spines(result).issue is None
+    assert document.to_text() == source
+
+
+@pytest.mark.parametrize(
+    "between",
+    ("=2\n4d\n", "=2\n=3\n"),
+)
+def test_merge_reopening_rejects_data_or_second_barline(between) -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n*^\n=1\t=1\n1c\t1e\n*v\t*v\n" + between + "*^\n1d\t1f\n*-\t*-\n"
+    )
+
+    with pytest.raises(HumdrumError, match="Nie znaleziono"):
+        plan_merge_reopening(document, 5, 0)
+
+
+def test_cross_bar_reopening_is_reported_with_both_measures() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n*^\n=51\t=51\n1c\t1e\n*v\t*v\n=52\n*^\n1d\t1f\n=53\t=53\n*-\t*-\n"
+    )
+    trace = trace_spines(document)
+
+    issues = find_split_issues(trace)
+    problems = group_split_issues(trace, issues)
+
+    assert len(issues) == 1
+    assert issues[0].code == "cross_bar_reopening"
+    assert issues[0].related_lines == (6, 7)
+    assert "51 i 52" in issues[0].message
+    assert len(problems) == 1
+    assert problems[0].start_line == 3
+    assert problems[0].end_line == 9
+
+
+def test_consecutive_cross_bar_reopenings_share_one_repair_range() -> None:
+    document = HumdrumDocument.from_text(
+        "**kern\n"
+        "*^\n"
+        "=1\t=1\n"
+        "1c\t1e\n"
+        "*v\t*v\n"
+        "=2\n"
+        "*^\n"
+        "1d\t1f\n"
+        "*v\t*v\n"
+        "=3\n"
+        "*^\n"
+        "1e\t1g\n"
+        "=4\t=4\n"
+        "*-\t*-\n"
+    )
+    trace = trace_spines(document)
+
+    issues = find_split_issues(trace)
+    problems = group_split_issues(trace, issues)
+
+    assert len(issues) == 2
+    assert all(issue.code == "cross_bar_reopening" for issue in issues)
+    assert len(problems) == 1
+    assert problems[0].start_line == 3
+    assert problems[0].end_line == 13
+    assert len(problems[0].editable_identities) == 1

@@ -276,6 +276,113 @@ class SplitIssue:
     message: str
 
 
+def _find_cross_bar_reopenings(trace: SpineTrace) -> tuple[SplitIssue, ...]:
+    """Znajdź zbędne scalenia i otwarcia rozdzielone jedną kreską."""
+    issues: list[SplitIssue] = []
+    measure: str | None = None
+
+    for position, row in enumerate(trace.records):
+        record = row.record
+        if trace.issue is not None and record.line_number >= trace.issue.line_number:
+            break
+
+        if record.kind is RecordKind.BARLINE:
+            match = next(
+                (found for token in record.fields if (found := re.match(r"^=+(\d+)", token))),
+                None,
+            )
+            measure = match.group(1) if match is not None else None
+            continue
+
+        if record.kind is not RecordKind.INTERPRETATION:
+            continue
+
+        roots = {
+            branch.identity.root_column
+            for token, branch in zip(record.fields, row.branches, strict=True)
+            if token == "*v"
+        }
+
+        for root in sorted(roots):
+            columns = [
+                column
+                for column, branch in enumerate(row.branches)
+                if branch.identity.root_column == root and record.fields[column] == "*v"
+            ]
+            if len(columns) != 2 or columns[1] != columns[0] + 1:
+                continue
+
+            branches = tuple(row.branches[column] for column in columns)
+            parent = _merge_branch_group(branches)
+            if parent is None:
+                continue
+            if tuple(branch.path for branch in branches) != (
+                parent.path + (0,),
+                parent.path + (1,),
+            ):
+                continue
+
+            boundary: int | None = None
+            next_measure: str | None = None
+
+            for following in trace.records[position + 1 :]:
+                candidate = following.record
+                if trace.issue is not None and candidate.line_number >= trace.issue.line_number:
+                    break
+                if candidate.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+                    continue
+                if candidate.kind is RecordKind.DATA:
+                    break
+
+                if candidate.kind is RecordKind.BARLINE:
+                    if boundary is not None:
+                        break
+                    boundary = candidate.line_number
+                    match = next(
+                        (
+                            found
+                            for token in candidate.fields
+                            if (found := re.match(r"^=+(\d+)", token))
+                        ),
+                        None,
+                    )
+                    next_measure = match.group(1) if match is not None else None
+
+                matching = [
+                    column for column, branch in enumerate(following.branches) if branch == parent
+                ]
+                if len(matching) != 1:
+                    break
+
+                if candidate.kind is not RecordKind.INTERPRETATION:
+                    continue
+
+                token = candidate.fields[matching[0]]
+                if token == "*^":
+                    if boundary is not None:
+                        location = (
+                            f" między taktami {measure} i {next_measure}"
+                            if measure is not None and next_measure is not None
+                            else " przez kreskę taktową"
+                        )
+                        issues.append(
+                            SplitIssue(
+                                code="cross_bar_reopening",
+                                line_number=record.line_number,
+                                measure=measure,
+                                identities=(parent.identity,),
+                                related_lines=(boundary, candidate.line_number),
+                                message=("Zbędne scalenie i ponowne rozdwojenie" + location + "."),
+                            )
+                        )
+                    break
+
+                if token in {"*v", "*x", "*+", "*-"}:
+                    break
+
+    return tuple(issues)
+
+
 def find_split_issues(trace: SpineTrace) -> tuple[SplitIssue, ...]:
     """Check project placement rules within the safely traced range."""
     issues: list[SplitIssue] = []
@@ -379,6 +486,7 @@ def find_split_issues(trace: SpineTrace) -> tuple[SplitIssue, ...]:
             measure_rows.append(row)
 
     check_measure(measure_rows, measure)
+    issues.extend(_find_cross_bar_reopenings(trace))
     return tuple(issues)
 
 
@@ -419,7 +527,38 @@ def group_split_issues(
             ),
             rows[-1].record.line_number if rows else issue.line_number,
         )
+        if issue.code == "cross_bar_reopening":
+            reopening_line = max(issue.related_lines)
+            end_line = next(
+                (
+                    row.record.line_number
+                    for row in rows
+                    if row.record.kind is RecordKind.BARLINE
+                    and row.record.line_number > reopening_line
+                ),
+                rows[-1].record.line_number if rows else reopening_line,
+            )
+
         grouped.setdefault((start_line, end_line), []).append(issue)
+
+    # Naprawa przez kreskę może obejmować także problemy sąsiedniego taktu.
+    # Łączymy zakresy nakładające się, ale nie te tylko stykające się kreską.
+    merged_groups: list[tuple[int, int, list[SplitIssue]]] = []
+
+    for (start_line, end_line), range_issues in sorted(grouped.items()):
+        if merged_groups and start_line < merged_groups[-1][1]:
+            previous_start, previous_end, previous_issues = merged_groups[-1]
+            merged_groups[-1] = (
+                previous_start,
+                max(previous_end, end_line),
+                previous_issues + range_issues,
+            )
+        else:
+            merged_groups.append((start_line, end_line, range_issues.copy()))
+
+    grouped = {
+        (start_line, end_line): range_issues for start_line, end_line, range_issues in merged_groups
+    }
 
     ranges: list[ProblemRange] = []
 
@@ -1141,14 +1280,12 @@ class FragmentDraft:
 
         rendered = self.rendered_lines()
         current_line = self.rendered_index(source_line) + 1
-        analysis_end = next(
-            (
-                index + 1
-                for index in range(current_line, len(rendered))
-                if rendered[index].text.startswith("=")
-            ),
-            len(rendered),
-        )
+        boundary_ends = [
+            index + 1
+            for index in range(current_line, len(rendered))
+            if rendered[index].text.startswith("=")
+        ][:2]
+        analysis_end = boundary_ends[-1] if boundary_ends else len(rendered)
         candidate = HumdrumDocument(
             [line.text for line in rendered[:analysis_end]],
             False,
@@ -2321,7 +2458,7 @@ def plan_merge_reopening(
     source_line: int,
     root_column: int,
 ) -> MergeReopeningPlan:
-    """Znajdź ponowne otwarcie po scaleniu w tym samym takcie."""
+    """Znajdź ponowne otwarcie w takcie lub bez danych przez jedną kreskę."""
     trace = trace_spines(document)
     if trace.issue is not None:
         raise HumdrumError(f"Linia {trace.issue.line_number}: {trace.issue.message}")
@@ -2360,14 +2497,27 @@ def plan_merge_reopening(
             "Łączenie ponownych otwarć zagnieżdżonych gałęzi nie jest jeszcze obsługiwane."
         )
 
+    crossed_barline = False
+    data_before_barline = False
+
     for row in trace.records:
         record = row.record
         if record.line_number <= source_line:
             continue
+
         if record.kind is RecordKind.BARLINE:
-            break
+            if crossed_barline or data_before_barline:
+                break
+            crossed_barline = True
+            continue
+
         if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
             continue
+
+        if record.kind is RecordKind.DATA:
+            if crossed_barline:
+                break
+            data_before_barline = True
 
         matching = [column for column, branch in enumerate(row.branches) if branch == parent]
         if len(matching) != 1:
@@ -2386,7 +2536,10 @@ def plan_merge_reopening(
             if token in {"*v", "*x", "*+", "*-"}:
                 break
 
-    raise HumdrumError("Nie znaleziono ponownego otwarcia tego głosu w tym samym takcie.")
+    raise HumdrumError(
+        "Nie znaleziono ponownego otwarcia tego głosu w tym samym takcie "
+        "ani bezpośrednio przez kreskę taktową."
+    )
 
 
 @dataclass(frozen=True)
@@ -2428,7 +2581,9 @@ def prepare_merge_reopening(
         column = row.branches.index(plan.parent)
         fields = list(record.fields)
 
-        if record.kind is RecordKind.DATA:
+        if record.kind is RecordKind.BARLINE:
+            fill = fields[column]
+        elif record.kind is RecordKind.DATA:
             fill = "" if plan.identity.spine_type == "**kern" else "."
             proposed_cells.append((line_number, column + 1))
         elif record.kind is RecordKind.LOCAL_COMMENT:
@@ -2494,6 +2649,12 @@ def prepare_merge_reopenings(
         ),
         len(document.lines) + 1,
     )
+    if first_plan.reopening_line > end_line:
+        return prepare_merge_reopening(
+            document,
+            source_line,
+            root_column,
+        )
 
     merged: dict[int, tuple[DraftLine, ...]] = {}
     proposed_cells: list[tuple[int, int]] = []
