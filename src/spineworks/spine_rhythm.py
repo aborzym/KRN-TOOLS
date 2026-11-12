@@ -751,6 +751,9 @@ def suggest_reopening_fill(
 ) -> tuple[TokenSuggestion, ...]:
     """Zaproponuj pauzy po połączeniu zamknięć i ponownych otwarć."""
     plan = plan_merge_reopening(document, source_line, root_column)
+    if plan.reopening_lines:
+        return ()
+
     structure = trace_spines(document)
 
     crosses_barline = any(

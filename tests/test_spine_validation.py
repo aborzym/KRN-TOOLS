@@ -3087,3 +3087,35 @@ def test_consecutive_cross_bar_reopenings_share_one_repair_range() -> None:
     assert problems[0].start_line == 3
     assert problems[0].end_line == 13
     assert len(problems[0].editable_identities) == 1
+
+
+def test_merge_reopening_preserves_three_nested_layers() -> None:
+    source = (
+        "**kern\n"
+        "=146\n"
+        "*^\n"
+        "*\t*^\n"
+        "4c\t4e\t4g\n"
+        "*v\t*v\t*v\n"
+        "*^\n"
+        "*\t*^\n"
+        "4d\t4f\t4a\n"
+        "=147\t=147\t=147\n"
+        "*-\t*-\t*-\n"
+    )
+    document = HumdrumDocument.from_text(source)
+
+    plan = plan_merge_reopening(document, 6, 0)
+    proposal = prepare_merge_reopening(document, 6, 0)
+
+    assert plan.reopening_lines == (7, 8)
+    assert proposal.replacements == ((6, ()), (7, ()), (8, ()))
+    assert proposal.proposed_cells == ()
+
+    removed = set(dict(proposal.replacements))
+    repaired = HumdrumDocument(
+        [line for number, line in enumerate(document.lines, start=1) if number not in removed],
+        document.trailing_newline,
+    )
+    assert trace_spines(repaired).issue is None
+    assert repaired.lines[4:6] == ["4c\t4e\t4g", "4d\t4f\t4a"]

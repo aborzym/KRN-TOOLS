@@ -3,6 +3,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
+from itertools import pairwise
 
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 
@@ -388,6 +389,7 @@ def find_split_issues(trace: SpineTrace) -> tuple[SplitIssue, ...]:
     issues: list[SplitIssue] = []
     measure: str | None = None
     measure_rows: list[TracedRecord] = []
+    has_start_barline = False
 
     def check_measure(rows: list[TracedRecord], label: str | None) -> None:
         data_lines: list[int] = []
@@ -417,7 +419,49 @@ def find_split_issues(trace: SpineTrace) -> tuple[SplitIssue, ...]:
                         message="Rozdwojenie po rekordach danych w tym takcie.",
                     )
                 )
+            if openings and not data_lines and has_start_barline:
+                preceding = [
+                    earlier
+                    for earlier in rows[:position]
+                    if earlier.record.kind is RecordKind.INTERPRETATION
+                    and any(token != "*" for token in earlier.record.fields)
+                ]
 
+                # Nie przestawiamy operacji zależnych od wcześniejszej
+                # zmiany struktury ani interpretacji w otwieranej gałęzi.
+                if preceding and not any(
+                    token in {"*^", "*v", "*x", "*+", "*-"} or token.startswith("**")
+                    for earlier in preceding
+                    for token in earlier.record.fields
+                ):
+                    movable = tuple(
+                        dict.fromkeys(
+                            branch.identity
+                            for token, branch in zip(record.fields, row.branches, strict=True)
+                            if token == "*^"
+                            and all(
+                                branch in earlier.branches
+                                and earlier.record.fields[earlier.branches.index(branch)] == "*"
+                                for earlier in preceding
+                            )
+                        )
+                    )
+                    if movable:
+                        issues.append(
+                            SplitIssue(
+                                code="split_after_interpretation",
+                                line_number=record.line_number,
+                                measure=label,
+                                identities=movable,
+                                related_lines=tuple(
+                                    earlier.record.line_number for earlier in preceding
+                                ),
+                                message=(
+                                    "Rozdwojenie po interpretacjach na początku "
+                                    "taktu — przenieś przed interpretacje."
+                                ),
+                            )
+                        )
             closing_groups: list[SpineIdentity] = []
             for column, token in enumerate(record.fields):
                 if token == "*v" and (column == 0 or record.fields[column - 1] != "*v"):
@@ -477,6 +521,10 @@ def find_split_issues(trace: SpineTrace) -> tuple[SplitIssue, ...]:
         if row.record.kind is RecordKind.BARLINE:
             check_measure(measure_rows, measure)
             measure_rows = []
+        if row.record.kind is RecordKind.BARLINE:
+            check_measure(measure_rows, measure)
+            measure_rows = []
+            has_start_barline = True
             match = next(
                 (match for token in row.record.fields if (match := re.match(r"^=+(\d+)", token))),
                 None,
@@ -1257,11 +1305,25 @@ class FragmentDraft:
             False,
         )
         trace = trace_spines(candidate)
-        replacements = prepare_clef_reordering(
-            candidate,
-            start_line=current_start,
-            end_line=current_end,
-            trace=trace,
+        boundaries = [
+            current_start,
+            *(
+                row.record.line_number
+                for row in trace.records
+                if row.record.kind is RecordKind.BARLINE
+                and current_start < row.record.line_number < current_end
+            ),
+            current_end,
+        ]
+        replacements = tuple(
+            replacement
+            for left, right in pairwise(boundaries)
+            for replacement in prepare_clef_reordering(
+                candidate,
+                start_line=left,
+                end_line=right,
+                trace=trace,
+            )
         )
         if not replacements:
             return False
@@ -2315,7 +2377,10 @@ def plan_split_move(
         None,
     )
     if target is None:
+        instrument = branch.identity.instrument or "bez nazwy"
         raise HumdrumError(
+            f"Linia robocza {source_line}, spine {root_column + 1} "
+            f"({instrument}), ścieżka warstwy {branch.path}: "
             "Nie można przenieść otwarcia przed dane: "
             "jego gałąź powstaje dopiero po rozpoczęciu taktu."
         )
@@ -2451,6 +2516,7 @@ class MergeReopeningPlan:
     identity: SpineIdentity
     branches: tuple[SpineBranch, ...]
     parent: SpineBranch
+    reopening_lines: tuple[int, ...] = ()
 
 
 def plan_merge_reopening(
@@ -2487,6 +2553,64 @@ def plan_merge_reopening(
     parent = _merge_branch_group(branches)
     if parent is None:
         raise HumdrumError("Nieprawidłowa grupa scalanych gałęzi.")
+    if len(branches) > 2:
+        expected_paths = tuple(branch.path for branch in branches)
+        reopening_lines: list[int] = []
+        crossed_barline = False
+
+        for row in trace.records:
+            record = row.record
+            if record.line_number <= source_line:
+                continue
+            if record.kind is RecordKind.DATA:
+                break
+            if record.kind is RecordKind.BARLINE:
+                if crossed_barline or reopening_lines:
+                    break
+                crossed_barline = True
+                continue
+            if record.kind is not RecordKind.INTERPRETATION:
+                continue
+
+            active = [
+                (token, branch.path)
+                for token, branch in zip(record.fields, row.branches, strict=True)
+                if branch.identity == parent.identity
+                and branch.path[: len(parent.path)] == parent.path
+            ]
+            if not active or any(
+                token in {"*v", "*x", "*+", "*-"} or token.startswith("**") for token, _ in active
+            ):
+                break
+            if not any(token == "*^" for token, _ in active):
+                continue
+
+            paths_after = tuple(
+                result
+                for token, path in active
+                for result in ((path + (0,), path + (1,)) if token == "*^" else (path,))
+            )
+            if any(
+                not any(expected[: len(path)] == path for expected in expected_paths)
+                for path in paths_after
+            ):
+                break
+
+            reopening_lines.append(record.line_number)
+            if paths_after == expected_paths:
+                return MergeReopeningPlan(
+                    source_line=source_line,
+                    reopening_line=record.line_number,
+                    identity=parent.identity,
+                    branches=branches,
+                    parent=parent,
+                    reopening_lines=tuple(reopening_lines),
+                )
+
+        raise HumdrumError(
+            "Nie znaleziono ponownego otwarcia odtwarzającego "
+            "układ wszystkich scalonych warstw przed danymi."
+        )
 
     # Pierwsza wersja łączy parę gałęzi bez zagnieżdżeń.
     if tuple(branch.path for branch in branches) != (
@@ -2571,6 +2695,52 @@ def prepare_merge_reopening(
         if all(token == "*" for token in fields)
         else (DraftLine(source_line=source_line, text="\t".join(fields)),)
     )
+
+    if plan.reopening_lines:
+        parent_path = plan.parent.path
+
+        for line_number in range(source_line + 1, plan.reopening_line + 1):
+            row = rows[line_number]
+            record = row.record
+            if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+                continue
+            if record.kind is RecordKind.DATA:
+                raise HumdrumError(f"Linia {line_number}: dane wewnątrz zagnieżdżonego otwarcia.")
+
+            expanded: list[str] = []
+            for token, branch in zip(record.fields, row.branches, strict=True):
+                if (
+                    branch.identity != plan.identity
+                    or branch.path[: len(parent_path)] != parent_path
+                ):
+                    expanded.append(token)
+                    continue
+
+                width = sum(leaf.path[: len(branch.path)] == branch.path for leaf in plan.branches)
+                if not width:
+                    raise HumdrumError(f"Linia {line_number}: brak odpowiadającej warstwy.")
+
+                if record.kind is RecordKind.LOCAL_COMMENT:
+                    expanded.extend([token, *(["!"] * (width - 1))])
+                else:
+                    fill = "*" if token == "*^" else token
+                    expanded.extend([fill] * width)
+
+            replacements[line_number] = (
+                ()
+                if line_number in plan.reopening_lines and all(token == "*" for token in expanded)
+                else (
+                    DraftLine(
+                        source_line=line_number,
+                        text="\t".join(expanded),
+                    ),
+                )
+            )
+
+        return MergeReopeningProposal(
+            replacements=tuple(sorted(replacements.items())),
+            proposed_cells=(),
+        )
 
     for line_number in range(source_line + 1, plan.reopening_line):
         row = rows[line_number]
@@ -3017,6 +3187,46 @@ def prepare_preserved_closing_block(
     raise HumdrumError("Nie można dodać scalenia bez zmiany istniejących zamknięć.")
 
 
+def _repeat_states_before(
+    trace: SpineTrace,
+    line_number: int,
+) -> dict[SpineBranch, bool]:
+    """Odtwórz stan *rep w każdej warstwie przed wskazaną linią."""
+    states: dict[SpineBranch, bool] = {}
+
+    for row in trace.records:
+        record = row.record
+        if record.kind in {RecordKind.GLOBAL, RecordKind.EMPTY}:
+            continue
+
+        current: dict[SpineBranch, bool] = {}
+        for branch in row.branches:
+            if branch in states:
+                current[branch] = states[branch]
+            else:
+                current[branch] = any(
+                    active
+                    and previous.identity == branch.identity
+                    and (
+                        previous.path[: len(branch.path)] == branch.path
+                        or branch.path[: len(previous.path)] == previous.path
+                    )
+                    for previous, active in states.items()
+                )
+
+        if record.line_number >= line_number:
+            return current
+
+        if record.kind is RecordKind.INTERPRETATION:
+            for token, branch in zip(record.fields, row.branches, strict=True):
+                if token in {"*rep", "*Xrep"}:
+                    current[branch] = token == "*rep"
+
+        states = current
+
+    return states
+
+
 def prepare_clef_reordering(
     document: HumdrumDocument,
     start_line: int,
@@ -3076,6 +3286,8 @@ def prepare_clef_reordering(
         return ()
 
     moved: list[DraftLine] = []
+    repeat_states = _repeat_states_before(trace, closing.record.line_number)
+    closed_repeats: set[SpineBranch] = set()
 
     for row in clef_rows:
         fields = ["*"] * len(closing.branches)
@@ -3100,12 +3312,39 @@ def prepare_clef_reordering(
                     "nie można przypisać interpretacji do wcześniejszych warstw."
                 )
 
-            target_columns = [min(destinations)] if token.startswith("*clef") else destinations
+            if token.startswith("*clef"):
+                target_columns = [min(destinations)]
+            elif token == "*Xrep" and len(destinations) > 1:
+                target_columns = [
+                    column
+                    for column in destinations
+                    if repeat_states.get(closing.branches[column], False)
+                ]
+                if not target_columns:
+                    if any(closing.branches[col] in closed_repeats for col in destinations):
+                        continue
+                    raise HumdrumError(
+                        f"Linia {row.record.line_number}: "
+                        "nie znaleziono aktywnego *rep w scalanych warstwach."
+                    )
+            else:
+                target_columns = destinations
 
             for target_column in target_columns:
                 if fields[target_column] not in {"*", token}:
                     raise HumdrumError("Sprzeczne interpretacje w jednej warstwie.")
                 fields[target_column] = token
+                if token in {"*rep", "*Xrep"}:
+                    target = closing.branches[target_column]
+                    repeat_states[target] = token == "*rep"
+                    if token == "*Xrep":
+                        closed_repeats.add(target)
+                    else:
+                        closed_repeats.discard(target)
+
+        if all(token == "*" for token in fields):
+            continue
+
         moved.append(
             DraftLine(
                 source_line=None,
@@ -3115,6 +3354,30 @@ def prepare_clef_reordering(
             )
         )
 
+    merged_repeat_rows: dict[int, tuple[DraftLine, ...]] = {}
+    previous = next(
+        (row for row in rows if row.record.line_number == closing.record.line_number - 1),
+        None,
+    )
+
+    if (
+        previous is not None
+        and previous.record.kind is RecordKind.INTERPRETATION
+        and previous.branches == closing.branches
+        and "*Xrep" in previous.record.fields
+        and all(token in {"*", "*Xrep"} for token in previous.record.fields)
+        and moved
+    ):
+        incoming = moved[0].text.split("\t")
+        if "*Xrep" in incoming and all(token in {"*", "*Xrep"} for token in incoming):
+            combined = [
+                old if new == "*" else new
+                for old, new in zip(previous.record.fields, incoming, strict=True)
+            ]
+            number = previous.record.line_number
+            merged_repeat_rows[number] = (DraftLine(source_line=number, text="\t".join(combined)),)
+            del moved[0]
+
     moved.append(
         DraftLine(
             source_line=closing.record.line_number,
@@ -3122,6 +3385,7 @@ def prepare_clef_reordering(
         )
     )
     replacements = {
+        **merged_repeat_rows,
         closing.record.line_number: tuple(moved),
         **{row.record.line_number: () for row in clef_rows},
     }

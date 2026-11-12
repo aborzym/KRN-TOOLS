@@ -1202,7 +1202,7 @@ bezpiecznie przygotować naprawy, pokazuje komunikat.
             return None
 
         for issue in self.problem.issues:
-            if issue.code != "late_split":
+            if issue.code not in {"late_split", "split_after_interpretation"}:
                 continue
 
             indices = [
