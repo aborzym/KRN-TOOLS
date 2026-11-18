@@ -1,4 +1,5 @@
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 from fractions import Fraction
 
@@ -163,6 +164,7 @@ def trace_rhythm(
     initialized = False
 
     meters: dict[int, MeterSignature] = {}
+    measure_start: Fraction | None = None
     measure_end: Fraction | None = None
     measure_duration: Fraction | None = None
     measure_has_data = False
@@ -224,14 +226,23 @@ def trace_rhythm(
             elapsed = Fraction(0)
 
             if allow_auxiliary_rows:
+                meter_changed = False
                 if record.kind is RecordKind.INTERPRETATION:
                     for token, branch in zip(record.fields, row.branches, strict=True):
                         if branch.identity.spine_type != "**kern":
                             continue
                         if token.startswith("*M") and token[2:3].isdigit():
                             meters[branch.identity.root_column] = parse_meter(token)
+                            meter_changed = True
 
-                if record.kind is RecordKind.BARLINE:
+                is_barline = record.kind is RecordKind.BARLINE
+                if is_barline:
+                    measure_start = current_time
+                    measure_has_data = False
+
+                if measure_start is not None and (
+                    is_barline or (meter_changed and not measure_has_data)
+                ):
                     active_roots = {
                         branch.identity.root_column
                         for branch in row.branches
@@ -240,11 +251,10 @@ def trace_rhythm(
                     durations = {meters[root].duration for root in active_roots if root in meters}
                     if active_roots <= meters.keys() and len(durations) == 1:
                         measure_duration = next(iter(durations))
-                        measure_end = current_time + measure_duration
+                        measure_end = measure_start + measure_duration
                     else:
                         measure_duration = None
                         measure_end = None
-                    measure_has_data = False
 
             if record.kind is RecordKind.DATA:
                 kern_columns = [
@@ -590,6 +600,60 @@ def suggest_split_fill(
         )
 
     return tuple(suggestions)
+
+
+class MeterIndex:
+    """Wyszukuj metrum według spinu źródłowego i numeru linii."""
+
+    def __init__(self, structure: SpineTrace) -> None:
+        self._changes: dict[int, list[tuple[int, MeterSignature]]] = {}
+        self._errors: dict[int, tuple[int, str]] = {}
+
+        for row in structure.records:
+            record = row.record
+            if record.kind is not RecordKind.INTERPRETATION:
+                continue
+
+            found: dict[int, set[MeterSignature]] = {}
+            for token, branch in zip(record.fields, row.branches):
+                root = branch.identity.root_column
+                if root in self._errors:
+                    continue
+                if not (token.startswith("*M") and token[2:3].isdigit()):
+                    continue
+                try:
+                    meter = parse_meter(token)
+                except HumdrumError as error:
+                    self._errors[root] = (record.line_number, str(error))
+                    continue
+                found.setdefault(root, set()).add(meter)
+
+            for root, signatures in found.items():
+                if root in self._errors:
+                    continue
+                if len(signatures) > 1:
+                    self._errors[root] = (
+                        record.line_number,
+                        (
+                            f"Linia {record.line_number}: różne metra "
+                            "w gałęziach tego samego instrumentu."
+                        ),
+                    )
+                    continue
+                self._changes.setdefault(root, []).append(
+                    (record.line_number, next(iter(signatures)))
+                )
+
+    def at_line(self, source_line: int, root_column: int) -> MeterSignature:
+        error = self._errors.get(root_column)
+        if error is not None and error[0] <= source_line:
+            raise HumdrumError(error[1])
+
+        changes = self._changes.get(root_column, [])
+        index = bisect_right(changes, source_line, key=lambda change: change[0])
+        if index == 0:
+            raise HumdrumError(f"Linia {source_line}: brak metrum dla wskazanego spinu.")
+        return changes[index - 1][1]
 
 
 def meter_at_line(

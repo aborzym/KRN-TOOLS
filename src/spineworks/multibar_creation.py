@@ -5,7 +5,7 @@ from itertools import pairwise
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.kern_rhythm import hidden_rest_token, kern_duration
 from spineworks.meter_rhythm import MeterSignature
-from spineworks.spine_rhythm import meter_at_line, trace_rhythm
+from spineworks.spine_rhythm import MeterIndex, trace_rhythm
 from spineworks.spine_validation import RecordKind, trace_spines
 
 
@@ -43,6 +43,8 @@ def find_full_measure_rests(
     structure = trace_spines(document)
     if structure.issue is not None:
         raise HumdrumError(f"Linia {structure.issue.line_number}: {structure.issue.message}")
+
+    meter_index = MeterIndex(structure)
 
     rhythm = trace_rhythm(
         document,
@@ -132,7 +134,7 @@ def find_full_measure_rests(
                 continue
 
             try:
-                meter = meter_at_line(document, line_number, root)
+                meter = meter_index.at_line(line_number, root)
             except HumdrumError:
                 continue
 
@@ -278,6 +280,8 @@ def split_multibar_rests(
     if structure.issue is not None:
         raise HumdrumError(f"Linia {structure.issue.line_number}: {structure.issue.message}")
 
+    meter_index = MeterIndex(structure)
+
     rhythm = trace_rhythm(document, structure=structure, allow_auxiliary_rows=True)
     if rhythm.issue is not None:
         raise HumdrumError(f"Linia {rhythm.issue.line_number}: {rhythm.issue.message}")
@@ -327,7 +331,7 @@ def split_multibar_rests(
             if re.fullmatch(r"[0-9]+(?:%[0-9]+)?\.*r", token) is None:
                 continue
 
-            meter = meter_at_line(document, record.line_number, root)
+            meter = meter_index.at_line(record.line_number, root)
             duration = kern_duration(token)
             if duration is None:
                 continue
@@ -424,7 +428,7 @@ def split_multibar_rests(
                         safe = False
                         break
 
-                    active_meter = meter_at_line(document, active_record.line_number, root)
+                    active_meter = meter_index.at_line(active_record.line_number, root)
                     if active_meter != meter:
                         safe = False
                         break

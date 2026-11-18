@@ -2491,6 +2491,21 @@ class MainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Pauzy wielotaktowe")
         dialog.setMinimumWidth(580)
+        dialog.setStyleSheet("""
+            QCheckBox::indicator:unchecked:enabled,
+            QRadioButton::indicator:unchecked:enabled {
+                width: 12px;
+                height: 12px;
+                border: 1px solid #6f8d7a;
+                background-color: transparent;
+            }
+            QCheckBox::indicator:unchecked:enabled {
+                border-radius: 3px;
+            }
+            QRadioButton::indicator:unchecked:enabled {
+                border-radius: 7px;
+            }
+        """)
         form = QFormLayout(dialog)
 
         mode_widget = QWidget(dialog)
@@ -2525,6 +2540,7 @@ class MainWindow(QMainWindow):
             end_input.setEnabled(not checked)
 
         all_measures_checkbox.toggled.connect(sync_measure_inputs)
+        all_measures_checkbox.setChecked(True)
 
         without_layout_checkbox = QCheckBox("Bez LO:N:vis", dialog)
         layout_only_checkbox = QCheckBox("Tylko dopisz LO:N:vis", dialog)
@@ -2612,6 +2628,8 @@ class MainWindow(QMainWindow):
             all_spines_checkbox.blockSignals(False)
 
         all_spines_checkbox.toggled.connect(select_all_spines)
+        all_spines_checkbox.setChecked(True)
+
         for _, checkbox in spine_checkboxes:
             checkbox.toggled.connect(sync_all_spines)
 

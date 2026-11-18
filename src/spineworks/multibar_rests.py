@@ -3,7 +3,7 @@ import re
 from spineworks.humdrum import HumdrumDocument, HumdrumError
 from spineworks.kern_rhythm import kern_duration
 from spineworks.meter_rhythm import MeterSignature, parse_meter
-from spineworks.spine_rhythm import TimedRecord, meter_at_line, trace_rhythm
+from spineworks.spine_rhythm import MeterIndex, TimedRecord, trace_rhythm
 from spineworks.spine_validation import RecordKind, TracedRecord, trace_spines
 
 REST_LAYOUTS = {
@@ -164,6 +164,8 @@ def annotate_multibar_rests(
     if structure.issue is not None:
         raise HumdrumError(f"Linia {structure.issue.line_number}: {structure.issue.message}")
 
+    meter_index = MeterIndex(structure)
+
     rhythm = trace_rhythm(
         document,
         structure=structure,
@@ -240,11 +242,11 @@ def annotate_multibar_rests(
                 continue
 
             try:
-                meter = meter_at_line(
-                    document,
+                meter = meter_index.at_line(
                     record.line_number,
                     branch.identity.root_column,
                 )
+
             except HumdrumError as error:
                 warnings.append(f"Linia {record.line_number}, kolumna {column + 1}: {error}")
                 continue
