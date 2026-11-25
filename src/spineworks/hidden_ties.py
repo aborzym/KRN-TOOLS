@@ -115,36 +115,25 @@ def repair_hidden_ties(
                 ]
                 ends = [index for index, note in enumerate(notes) if "]" in note or "_" in note]
 
-                # Chronimy każdy dźwięk, dla którego istnieje możliwe
-                # poprawne połączenie, niezależnie od kolejności akordu.
-                unmatched_starts = [
-                    index
-                    for index in starts
-                    if not any(_may_match(old_notes[index], notes[end]) for end in ends)
-                ]
-                unmatched_ends = [
-                    index
-                    for index in ends
-                    if not any(_may_match(old_notes[start], notes[index]) for start in starts)
-                ]
+                # Usuwamy połączenia przez kreskę również między
+                # jednakowymi wysokościami, jeżeli fragment jest ukryty.
+                unmatched_starts = starts
+                unmatched_ends = ends
 
                 if unmatched_starts and unmatched_ends:
-                    left_hidden = all("yy" in old_notes[index] for index in unmatched_starts)
-                    right_hidden = all("yy" in notes[index] for index in unmatched_ends)
-                    has_hidden = any("yy" in old_notes[index] for index in unmatched_starts) or any(
+                    left_hidden = all(
+                        "yy" in old_notes[index]
+                        or "in" in edits.get((old_line, old_column, index), set())
+                        for index in unmatched_starts
+                    )
+                    has_hidden = left_hidden or any(
                         "yy" in notes[index] for index in unmatched_ends
                     )
 
-                    unambiguous = len(unmatched_starts) == len(unmatched_ends) and (
-                        left_hidden or right_hidden
-                    )
+                    unambiguous = len(unmatched_starts) == len(unmatched_ends) and left_hidden
                     simple_markers = all(
-                        old_notes[index].count("[") + old_notes[index].count("_") == 1
-                        for index in unmatched_starts
-                    ) and all(
-                        notes[index].count("]") + notes[index].count("_") == 1
-                        for index in unmatched_ends
-                    )
+                        old_notes[index].count("_") <= 1 for index in unmatched_starts
+                    ) and all(notes[index].count("_") <= 1 for index in unmatched_ends)
 
                     if has_hidden and unambiguous and simple_markers:
                         repairs.append(
@@ -192,7 +181,10 @@ def repair_hidden_ties(
             directions = changes.get(index, set())
             index += 1
 
-            if directions == {"in", "out"} and "_" in note:
+            if not directions:
+                return note
+
+            if directions == {"in", "out"} and "_" in note and "[" not in note and "]" not in note:
                 note = note.replace("_", "", 1)
             else:
                 if "out" in directions:

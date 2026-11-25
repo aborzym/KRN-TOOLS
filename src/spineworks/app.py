@@ -1483,25 +1483,38 @@ class MainWindow(QMainWindow):
             return
 
         count = sum(len(repair.start_notes) for repair in repairs)
-        if document.to_text() != before:
+        changed = document.to_text() != before
+
+        if changed:
             self.undo_texts.append(before)
             self.document = document
             self.undo_action.setEnabled(True)
             self._refresh_table()
             self._update_window_title()
-            message = f"Usunięto błędne ligatury: {count}"
+            message = f"Usunięto połączenia ligatur przez kreskę taktową: {count}"
         else:
-            message = "Nie znaleziono błędnych ligatur ukrytych nut"
+            message = "Nie znaleziono ligatur wymagających usunięcia w ukrytych fragmentach."
 
         self.statusBar().showMessage(message)
 
-        if warnings:
+        if changed or warnings:
             box = QMessageBox(self)
-            box.setWindowTitle("Ligatury wymagające sprawdzenia")
+            box.setWindowTitle("Ligatury — sprawdź ukryte fragmenty")
             box.setIcon(QMessageBox.Icon.Warning)
             box.setText(message)
-            box.setInformativeText(f"Pozostawiono niejednoznaczne przypadki: {len(warnings)}.")
-            box.setDetailedText("\n".join(warnings))
+
+            information = []
+            if changed:
+                information.append(
+                    "Sprawdź ukryte fragmenty na przełomach taktów. "
+                    "Mogły zostać usunięte również prawidłowe ligatury, "
+                    "które trzeba przywrócić ręcznie."
+                )
+            if warnings:
+                information.append(f"Pozostawiono niejednoznaczne przypadki: {len(warnings)}.")
+                box.setDetailedText("\n".join(warnings))
+
+            box.setInformativeText("\n\n".join(information))
             box.exec()
 
     def apply_text_italics(self) -> None:
