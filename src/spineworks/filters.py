@@ -351,6 +351,28 @@ def insert_spine(
         raise HumdrumError("Po dodaniu spine’u liczba spine’ów jest nieprawidłowa.")
     if filtered.spine_types[insertion_column] != spine_type:
         raise HumdrumError(f"Nowy spine nie ma oczekiwanego typu {spine_type}.")
+
+    if spine_type != "**kern":
+        parent_column = next(
+            (
+                column
+                for column in range(reference_column, -1, -1)
+                if document.spine_types[column] == "**kern"
+            ),
+            None,
+        )
+
+        if parent_column is not None:
+            for attribute in ("part_line", "staff_line"):
+                source_line = getattr(document.header, attribute)
+                target_line = getattr(filtered.header, attribute)
+                if source_line is None or target_line is None:
+                    continue
+
+                fields = filtered.fields(target_line)
+                fields[insertion_column] = document.fields(source_line)[parent_column]
+                filtered.replace_fields(target_line, fields)
+
     return filtered
 
 
